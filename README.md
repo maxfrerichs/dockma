@@ -152,7 +152,7 @@ The directory and `logs/` are kept at mode 0700, and `data.img`, `config.json` a
 | `guest/Image`, `guest/initramfs.cpio.zst` | Guest kernel and initramfs |
 | `logs/console.log` | Kernel and init output; the previous boot is kept as `console.log.1` |
 | `logs/docker.log` | dockerd output; the previous boot is kept as `docker.log.1` |
-| `logs/daemon.log` | Host daemon output (appended across runs) |
+| `logs/daemon.log` | Host daemon output; the previous run is kept as `daemon.log.1` |
 | `io.dockma.daemon.plist` | launchd job definition. With `--autostart true` it lives in `~/Library/LaunchAgents` instead. |
 
 ## How it works

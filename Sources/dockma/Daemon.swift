@@ -37,6 +37,7 @@ public final class Daemon {
             Log.info("startup failed: \(error)")
             exit(0)
         }
+        Self.redirectOutput(to: paths.daemonLog)
 
         signal(SIGPIPE, SIG_IGN)
         for sig in [SIGTERM, SIGINT] {
@@ -251,6 +252,16 @@ public final class Daemon {
             throw error
         }
         return fd
+    }
+
+    /// launchd appends the daemon's stdout and stderr to daemon.log forever.
+    /// Rotate it like the VM logs and point both descriptors at the fresh
+    /// file. A daemon run from a terminal keeps writing to the terminal.
+    nonisolated static func redirectOutput(to url: URL) {
+        guard isatty(STDERR_FILENO) == 0, let handle = try? rotateAndOpen(url) else { return }
+        dup2(handle.fileDescriptor, STDOUT_FILENO)
+        dup2(handle.fileDescriptor, STDERR_FILENO)
+        try? handle.close()
     }
 
     /// A random locally administered unicast MAC address.
