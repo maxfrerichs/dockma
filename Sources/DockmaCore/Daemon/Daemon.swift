@@ -21,6 +21,8 @@ public final class Daemon {
     private var stopRequested = false
     /// The hard stop that ends the shutdown grace period.
     private var forceStopTask: Task<Void, Never>?
+    /// When `requestStop()` ran; the full grace period counts from here.
+    private var stopRequestedAt: ContinuousClock.Instant?
     private var warnings: [String] = []
     private var lockFD: Int32 = -1
     private let startedAt = Date()
@@ -112,9 +114,11 @@ public final class Daemon {
             if self.stopRequested {
                 // A stop during boot can come before the agent runs; it can
                 // still power the guest off cleanly.
-                if self.agent?.send(.shutdown) == true {
+                if self.agent?.send(.shutdown) == true, let stopRequestedAt = self.stopRequestedAt {
                     Log.info("agent connected during stop, asked the guest to power off")
-                    self.scheduleForceStop(after: Self.shutdownGrace)
+                    // Counted from the stop request, so an agent that keeps
+                    // reconnecting can't postpone the hard stop.
+                    self.scheduleForceStop(at: stopRequestedAt + Self.shutdownGrace)
                 }
                 return
             }
@@ -225,6 +229,8 @@ public final class Daemon {
     public func requestStop() {
         guard !stopRequested else { return }
         stopRequested = true
+        let now = ContinuousClock.now
+        stopRequestedAt = now
         state = .stopping
         // New connections are refused from here on; the agent connection
         // stays open to deliver the shutdown request.
@@ -242,21 +248,21 @@ public final class Daemon {
         // second and gets the request then (see onConnect); otherwise only a
         // short grace period is useful.
         if agent?.send(.shutdown) == true {
-            scheduleForceStop(after: Self.shutdownGrace)
+            scheduleForceStop(at: now + Self.shutdownGrace)
         } else {
             Log.info("agent not connected; stopping VM in 2 s unless it connects")
-            scheduleForceStop(after: .seconds(2))
+            scheduleForceStop(at: now + .seconds(2))
         }
     }
 
-    /// Hard-stops the VM after `grace` unless the guest powers off first,
+    /// Hard-stops the VM at `deadline` unless the guest powers off first,
     /// replacing an earlier schedule.
-    private func scheduleForceStop(after grace: Duration) {
+    private func scheduleForceStop(at deadline: ContinuousClock.Instant) {
         guard let host else { return }
         forceStopTask?.cancel()
         forceStopTask = Task {
             do {
-                try await Task.sleep(for: grace)
+                try await Task.sleep(until: deadline, clock: .continuous)
             } catch {
                 return  // Rescheduled.
             }

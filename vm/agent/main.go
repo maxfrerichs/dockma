@@ -371,7 +371,14 @@ func (w *portWatcher) run(ctx context.Context) {
 			log.Printf("port watcher: %v", waiterErr)
 			lastErr = waiterErr.Error()
 		}
-		err := w.watch(ctx)
+		err := w.watch(ctx, func() {
+			// Only a failed attempt waits on it; an open stream can last
+			// hours, and the watch would queue every file created meanwhile.
+			if waiter != nil {
+				waiter.close()
+				waiter = nil
+			}
+		})
 		w.setDockerReady(false)
 		// dockerd not listening yet (boot, restart) is expected; other errors
 		// are logged once each instead of every second.
@@ -395,7 +402,8 @@ func (w *portWatcher) run(ctx context.Context) {
 
 // watch relists containers whenever a container event arrives on the
 // /events stream. Relisting keeps the logic simple and always consistent.
-func (w *portWatcher) watch(ctx context.Context) error {
+// opened runs once the stream is open and dockerd's API answers.
+func (w *portWatcher) watch(ctx context.Context, opened func()) error {
 	filters := url.QueryEscape(`{"type":["container"]}`)
 	req, _ := http.NewRequestWithContext(ctx, "GET", "http://docker/events?filters="+filters, nil)
 	resp, err := w.client.Do(req)
@@ -408,6 +416,7 @@ func (w *portWatcher) watch(ctx context.Context) error {
 	}
 	// The event stream is open and a request succeeded: the API answers.
 	w.setDockerReady(true)
+	opened()
 	decoder := json.NewDecoder(resp.Body)
 	for {
 		var event struct {

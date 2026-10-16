@@ -193,7 +193,7 @@ dockma shell ► ~/.dockma/shell.sock  │                        │
 - accepts the control connection that the guest agent opens as soon as it runs;
 - mirrors the guest's published ports as listeners on the host.
 
-`start` installs the job, then waits on `control.sock`, woken by kqueue rather than polling. The daemon replies once the agent reports that dockerd's API answers. If the connection closes first, the daemon has exited, and `start` shows its log.
+`start` installs the job, then waits on `control.sock`, woken by kqueue events rather than a polling loop. Short fallback timers remain only for cases with no event to wait on, such as a daemon whose pid launchd hasn't reported yet. The daemon replies once the agent reports that dockerd's API answers. If the connection closes first, the daemon has exited, and `start` shows its log.
 
 `stop` unloads the launchd job. The daemon then asks the agent to power the guest off, and hard-stops the VM after 20 s if that doesn't finish. launchd restarts the daemon if the guest powers off on its own or crashes. It does not restart it after a requested stop or a startup error, so a broken setup doesn't end up in a restart loop.
 

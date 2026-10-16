@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
+	"net"
 	"testing"
+	"time"
 )
 
 // The host (AgentMessage in Swift) decodes these exact shapes.
@@ -18,5 +21,61 @@ func TestDockerMessageJSON(t *testing.T) {
 		if string(got) != want {
 			t.Errorf("dockerMessage(%v) = %s; want %s", ready, got, want)
 		}
+	}
+}
+
+// handleControl sends hello and the full initial state, then only what
+// changed.
+func TestHandleControlSendsChangesOnly(t *testing.T) {
+	host, agent := net.Pipe()
+	defer host.Close()
+	w := newPortWatcher()
+	done := make(chan struct{})
+	go func() {
+		handleControl(agent, w)
+		close(done)
+	}()
+
+	lines := bufio.NewScanner(host)
+	next := func() string {
+		t.Helper()
+		host.SetReadDeadline(time.Now().Add(5 * time.Second))
+		if !lines.Scan() {
+			t.Fatalf("no message: %v", lines.Err())
+		}
+		var m message
+		if err := json.Unmarshal(lines.Bytes(), &m); err != nil {
+			t.Fatal(err)
+		}
+		if m.Type == "hello" {
+			return "hello"
+		}
+		got, _ := json.Marshal(m)
+		return string(got)
+	}
+
+	for _, want := range []string{
+		"hello",
+		`{"type":"docker","ready":false}`,
+		`{"type":"ports"}`, // omitempty drops an empty set; the host reads it as none
+	} {
+		if got := next(); got != want {
+			t.Fatalf("got %s; want %s", got, want)
+		}
+	}
+	w.setDockerReady(true)
+	if got, want := next(), `{"type":"docker","ready":true}`; got != want {
+		t.Fatalf("after ready: got %s; want %s", got, want)
+	}
+	w.publish([]ForwardedPort{{Port: 8080, Target: "127.0.0.1:8080"}})
+	if got, want := next(), `{"type":"ports","ports":[{"port":8080,"target":"127.0.0.1:8080"}]}`; got != want {
+		t.Fatalf("after publish: got %s; want %s", got, want)
+	}
+
+	host.Close()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handleControl did not return after the host closed")
 	}
 }
