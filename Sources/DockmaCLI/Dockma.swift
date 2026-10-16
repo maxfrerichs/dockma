@@ -31,12 +31,33 @@ func tail(_ url: URL, lines count: Int) -> String? {
     return trimmed.suffix(count).joined(separator: "\n")
 }
 
+/// Shows `title` while slow work runs: on a terminal that can move the
+/// cursor as a live panel over the lines appended to `logs`, otherwise as a
+/// plain line. Returns the panel, which the caller must finish before
+/// printing anything else.
+func showProgress(_ title: String, logs: [LogTail], style: TerminalStyle) -> LogPanelRenderer? {
+    guard Terminal.rendersEscapes(STDOUT_FILENO) else {
+        print(title)
+        return nil
+    }
+    return .standardOutput(title: title, logs: logs, style: style)
+}
+
+/// Tails of the guest console and daemon logs, the two that narrate a boot
+/// or a shutdown.
+func lifecycleLogs(paths: Paths, fromStart: Bool, ignoringPrevious: Bool = false) -> [LogTail] {
+    [paths.consoleLog, paths.daemonLog].map { url in
+        LogTail(url: url, fromStart: fromStart, ignoringInode: ignoringPrevious ? LogTail.inode(of: url) : nil)
+    }
+}
+
 struct Start: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Start the VM in the background (via launchd).")
 
     @Option(help: "Seconds to wait for Docker to answer.")
     var timeout: Int = 90
 
+    /// Starts the daemon and waits until Docker answers, showing the boot log on a terminal.
     func run() throws {
         guard Entitlements.hasVirtualization() else {
             throw DockmaError("""
@@ -50,15 +71,16 @@ struct Start: ParsableCommand {
         try config.validate()
         try GuestImage.validate(paths: paths)
 
+        let style = TerminalStyle.standardOutput()
         let agent = LaunchAgent(paths: paths, executable: currentExecutable())
         var job = agent.state()
         if job.isLoaded, job.pid != nil {
             if DockerPing.isResponding(socketPath: paths.dockerSocket.path) {
-                print("dockma is already running")
+                print(style.success("dockma is already running"))
                 return
             }
             if (try? ControlClient.status(paths: paths))?.state == .stopping {
-                print("waiting for the previous VM to stop...")
+                print("Waiting for the previous VM to stop…")
                 try agent.bootout()
                 job = agent.state()
             }
@@ -68,16 +90,27 @@ struct Start: ParsableCommand {
             try agent.bootout()
             job = agent.state()
         }
-        if !job.isLoaded {
+        let logs: [LogTail]
+        if job.isLoaded {
+            // A daemon that is already booting has rotated its logs.
+            logs = lifecycleLogs(paths: paths, fromStart: true)
+        } else {
             if (try? ControlClient.status(paths: paths)) != nil {
-                print("dockma is already running (started outside launchd with `dockma daemon`)")
+                print(style.success("dockma is already running") + " (started outside launchd with `dockma daemon`)")
                 return
             }
+            // Until the new daemon rotates them, the logs are the previous
+            // run's; snapshot them before it can.
+            logs = lifecycleLogs(paths: paths, fromStart: true, ignoringPrevious: true)
             try agent.install(autostart: config.autostart)
         }
 
-        print("starting dockma...")
-        let deadline = ContinuousClock.now + .seconds(timeout)
+        let startedAt = ContinuousClock.now
+        let deadline = startedAt + .seconds(timeout)
+        let progress = showProgress("Starting dockma…", logs: logs, style: style)
+        // Erases the panel before an error propagates and is printed.
+        defer { progress?.finish() }
+        let errorStyle = TerminalStyle.standardError()
         do {
             let fd = try connectToDaemon(agent: agent, paths: paths, deadline: deadline)
             switch try ControlClient.waitUntilReady(fd: fd, timeout: deadline - .now) {
@@ -96,17 +129,21 @@ struct Start: ParsableCommand {
                 throw StartFailure.timedOut
             }
         } catch StartFailure.daemonExited {
-            printError("the dockma daemon exited during startup:")
+            progress?.finish()
+            printError(errorStyle.failure("The dockma daemon exited during startup. Its log:"))
             if let log = tail(paths.daemonLog, lines: 15) { printError(log) }
             throw ExitCode.failure
         } catch StartFailure.timedOut {
-            printError("Docker did not answer within \(timeout)s. Last console output:")
+            progress?.finish()
+            printError(errorStyle.failure("Docker did not answer within \(timeout)s. Last console output:"))
             if let log = tail(paths.consoleLog, lines: 20) { printError(log) }
             throw ExitCode.failure
         }
-        print("dockma is running; Docker socket: \(paths.dockerSocket.path)")
-        if let note = DockerContext.ensure(paths: paths) { print(note) }
-        if let hint = DockerContext.hint(paths: paths) { print(hint) }
+        progress?.finish()
+        print(style.success("Docker engine is ready") + " " + style.dim("(\(TerminalText.seconds(.now - startedAt)))"))
+        print("  Socket: \(paths.dockerSocket.path)")
+        if let note = DockerContext.ensure(paths: paths) { print("  " + note) }
+        if let hint = DockerContext.hint(paths: paths) { print("  " + hint) }
     }
 
     /// Why `start` gave up waiting.
@@ -150,16 +187,22 @@ struct Start: ParsableCommand {
 struct Stop: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Shut the VM down gracefully.")
 
+    /// Stops the launchd job, showing the shutdown log on a terminal.
     func run() throws {
         let paths = Paths.default()
+        let style = TerminalStyle.standardOutput()
         let agent = LaunchAgent(paths: paths, executable: currentExecutable())
         if agent.state().isLoaded {
-            print("stopping dockma...")
+            let startedAt = ContinuousClock.now
+            // Stopping doesn't rotate the logs; only new lines matter.
+            let progress = showProgress("Stopping dockma…", logs: lifecycleLogs(paths: paths, fromStart: false), style: style)
+            defer { progress?.finish() }
             try agent.bootout()
-            print("dockma stopped")
+            progress?.finish()
+            print(style.success("dockma stopped") + " " + style.dim("(\(TerminalText.seconds(.now - startedAt)))"))
         } else if (try? ControlClient.stop(paths: paths)) != nil {
             // A daemon started by hand (`dockma daemon`), not by launchd.
-            print("stop requested")
+            print(style.success("Stop requested") + " (daemon started with `dockma daemon`)")
         } else {
             print("dockma is not running")
         }
@@ -186,13 +229,16 @@ struct Status: ParsableCommand {
     @Flag(help: "Print JSON.")
     var json = false
 
+    /// Prints the daemon's status, in JSON with `--json`.
     func run() throws {
         let paths = Paths.default()
+        let style = TerminalStyle.standardOutput()
         guard let status = try? ControlClient.status(paths: paths) else {
             if json {
                 print(#"{"state":"stopped"}"#)
             } else {
                 print("dockma is stopped")
+                print(style.dim("Start it with `dockma start`."))
             }
             return
         }
@@ -205,14 +251,17 @@ struct Status: ParsableCommand {
         }
         let dockerUp = DockerPing.isResponding(socketPath: paths.dockerSocket.path)
         let uptime = Duration.seconds(Int(Date().timeIntervalSince(status.startedAt)))
-        print("state:    \(status.state.rawValue)")
-        print("docker:   \(dockerUp ? "ready" : "not answering") (\(paths.dockerSocket.path))")
+        // Color wraps values only: scripts match `state: *running`.
+        let state = status.state == .running ? style.green(status.state.rawValue) : style.yellow(status.state.rawValue)
+        print("state:    \(state)")
+        print("docker:   \(dockerUp ? style.green("ready") : style.red("not answering")) \(style.dim("(\(paths.dockerSocket.path))"))")
         print("uptime:   \(uptime.formatted(.units(allowed: [.hours, .minutes, .seconds], width: .narrow)))")
         print("vm:       \(status.cpus) CPUs, \(status.memoryMiB) MiB, kernel \(status.guestKernel ?? "?")")
-        print("agent:    \(status.agentConnected ? "connected" : "disconnected") \(status.agentVersion ?? "")")
-        print("ports:    \(status.forwardedPorts.isEmpty ? "none" : status.forwardedPorts.map(String.init).joined(separator: ", "))")
+        let agentState = status.agentConnected ? style.green("connected") : style.red("disconnected")
+        print("agent:    \(agentState) \(style.dim(status.agentVersion ?? ""))")
+        print("ports:    \(status.forwardedPorts.isEmpty ? style.dim("none") : status.forwardedPorts.map(String.init).joined(separator: ", "))")
         print("daemon:   pid \(status.pid)")
-        for warning in status.warnings { print("warning:  \(warning)") }
+        for warning in status.warnings { print("warning:  \(style.yellow(warning))") }
         if let hint = DockerContext.hint(paths: paths) { print(hint) }
     }
 }
@@ -267,6 +316,7 @@ struct Logs: ParsableCommand {
         if docker && daemon { throw ValidationError("choose one of --docker and --daemon") }
     }
 
+    /// Prints the chosen log's tail, then follows it with `--follow`.
     func run() throws {
         let paths = Paths.default()
         let url = docker ? paths.dockerLog : daemon ? paths.daemonLog : paths.consoleLog
@@ -274,39 +324,24 @@ struct Logs: ParsableCommand {
             throw DockmaError("no log at \(url.path) yet")
         }
         if !text.isEmpty { print(text) }
-        if follow { try LogFollower(url: url).follow() }
+        if follow { LogFollower(url: url).follow() }
     }
 }
 
-/// Polls a log file for appended data. Handles the truncation/rotation that
-/// happens when the VM restarts.
+/// Polls a log file for appended data. `LogTail` handles the rotation and
+/// truncation that happen when the VM restarts.
 struct LogFollower {
     let url: URL
 
-    func follow() throws {
-        var offset = (try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.uint64Value ?? 0
-        var inode = Self.inode(url)
+    /// Prints what is appended to the log from now on; never returns.
+    func follow() -> Never {
+        var tail = LogTail(url: url, fromStart: false)
         while true {
             Thread.sleep(forTimeInterval: 0.3)
-            let currentInode = Self.inode(url)
-            let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.uint64Value ?? 0
-            if currentInode != inode || size < offset {
-                inode = currentInode
-                offset = 0
-            }
-            guard size > offset, let handle = try? FileHandle(forReadingFrom: url) else { continue }
-            try handle.seek(toOffset: offset)
-            if let data = try handle.readToEnd() {
+            while case let data = tail.readAppended(), !data.isEmpty {
                 FileHandle.standardOutput.write(data)
-                offset += UInt64(data.count)
             }
-            try? handle.close()
         }
-    }
-
-    static func inode(_ url: URL) -> UInt64? {
-        var st = stat()
-        return stat(url.path, &st) == 0 ? st.st_ino : nil
     }
 }
 
@@ -333,8 +368,10 @@ struct ConfigCommand: ParsableCommand {
     @Option(help: "Start dockma at login (true/false).")
     var autostart: Bool?
 
+    /// Applies the given settings, saves them and prints the result.
     func run() throws {
         let paths = Paths.default()
+        let style = TerminalStyle.standardOutput()
         try paths.createDirectories()
         var config = try Config.load(from: paths.config)
         let before = config
@@ -360,14 +397,20 @@ struct ConfigCommand: ParsableCommand {
                     try? FileManager.default.removeItem(at: from)
                 }
             }
-            print("saved; restart dockma to apply (`dockma restart`)")
+            let isRunning = (try? ControlClient.status(paths: paths)) != nil
+            print(style.success("Saved.") + (isRunning ? " Run `dockma restart` to apply." : " Applies on the next `dockma start`."))
         }
-        print("cpus:              \(config.cpus)")
-        print("memory:            \(config.memoryMiB) MiB")
-        print("disk:              \(config.diskGiB) GiB")
-        print("port bind address: \(config.portBindAddress)")
-        print("rosetta:           \(config.rosetta)")
-        print("autostart:         \(config.autostart)")
+        /// `value`, in bold when the setting just changed.
+        func show<Value: Equatable>(_ value: Value, _ previous: Value, unit: String = "") -> String {
+            let text = "\(value)\(unit)"
+            return value == previous ? text : style.bold(text)
+        }
+        print("cpus:              \(show(config.cpus, before.cpus))")
+        print("memory:            \(show(config.memoryMiB, before.memoryMiB, unit: " MiB"))")
+        print("disk:              \(show(config.diskGiB, before.diskGiB, unit: " GiB"))")
+        print("port bind address: \(show(config.portBindAddress, before.portBindAddress))")
+        print("rosetta:           \(show(config.rosetta, before.rosetta))")
+        print("autostart:         \(show(config.autostart, before.autostart))")
     }
 }
 
@@ -378,6 +421,7 @@ struct Delete: ParsableCommand {
     @Flag(name: .shortAndLong, help: "Don't ask for confirmation.")
     var force = false
 
+    /// Deletes the data disk, config and logs after confirmation.
     func run() throws {
         let paths = Paths.default()
         let agent = LaunchAgent(paths: paths, executable: currentExecutable())
@@ -387,7 +431,7 @@ struct Delete: ParsableCommand {
         if !force {
             print("This deletes all Docker images, containers and volumes in dockma. Continue? [y/N] ", terminator: "")
             guard readLine()?.lowercased() == "y" else {
-                print("aborted")
+                print("Aborted.")
                 return
             }
         }
@@ -397,7 +441,8 @@ struct Delete: ParsableCommand {
         }
         agent.removePlists()
         DockerContext.remove()
-        print("deleted dockma data (the guest image in \(paths.guest.path) was kept)")
+        print(TerminalStyle.standardOutput().success("Deleted dockma's data disk, config and logs."))
+        print("  The guest image in \(paths.guest.path) was kept.")
     }
 }
 

@@ -42,15 +42,16 @@ public final class ShellSession: @unchecked Sendable {
         return try session.run(argv: argv)
     }
 
+    /// Runs the session for `argv` until the remote command exits; returns its exit code.
     private func run(argv: [String]) throws -> Int32 {
-        let (rows, cols) = Self.terminalSize()
+        let (rows, cols) = Terminal.size()
         let term = ProcessInfo.processInfo.environment["TERM"] ?? "xterm-256color"
         send(.start(ShellStart(argv: argv, tty: tty, rows: rows, cols: cols, term: term)))
 
         if tty {
             enterRawMode()
             handleSignal(SIGWINCH) { session in
-                let (rows, cols) = Self.terminalSize()
+                let (rows, cols) = Terminal.size()
                 session.send(.resize(rows: rows, cols: cols))
             }
             // Raw mode turns ^C into a byte for the remote side; these only
@@ -191,15 +192,6 @@ public final class ShellSession: @unchecked Sendable {
         guard var original = savedTerminal else { return }
         tcsetattr(STDIN_FILENO, TCSANOW, &original)
         savedTerminal = nil
-    }
-
-    /// The local terminal size, or 24x80 when output isn't a terminal.
-    static func terminalSize() -> (rows: UInt16, cols: UInt16) {
-        var size = winsize()
-        for fd in [STDOUT_FILENO, STDIN_FILENO] where ioctl(fd, TIOCGWINSZ, &size) == 0 && size.ws_row > 0 {
-            return (size.ws_row, size.ws_col)
-        }
-        return (24, 80)
     }
 
     private static func printError(_ message: String) {

@@ -15,9 +15,9 @@ public enum DockerContext {
         guard let result = try? Subprocess.run(docker, arguments: ["context", "create", name, "--description", "dockma VM", "--docker", "host=\(host)"]),
               result.status == 0
         else {
-            return "could not create docker context \(name)"
+            return "Could not create docker context \(name)"
         }
-        return "created docker context \(name)"
+        return "Created docker context \(name)"
     }
 
     public static func remove() {

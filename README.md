@@ -2,9 +2,7 @@
 
 Run Docker on macOS using a lightweight virtual machine.
 
-## Disclaimer: dockma is built using LLM-based tools. However, the code is reviewed by a human being. Also, this README is written and adjusted by a human.
-
-dockma runs a lightweight, minimal Linux VM with a custom-built kernel and leverages Apple's Virtualization.framework. This virtual machine runs in the background and provides the Docker Engine.
+dockma runs a lightweight Linux VM with a custom-built kernel and leverages Apple's Virtualization.framework. This virtual machine runs in the background and provides the Docker Engine.
 The macOS `docker` CLI communicate to dockerd through a Unix socket. Your home directory is shared into the VM.
 
 ## Features
@@ -12,6 +10,7 @@ The macOS `docker` CLI communicate to dockerd through a Unix socket. Your home d
 - **Lightweight guest OS.**
   - Kernel: a custom 6.18 LTS kernel built from `tinyconfig` plus only the drivers and features Docker needs. Everything is built in, with no modules. It is compiled with `-O2` and the regular SLUB allocator, not tinyconfig's size-first `-Os` and `SLUB_TINY`.
   - Userspace: a busybox initramfs containing Docker's static binaries and a small guest agent.
+  - Boots in around 1.1s
 - **home directory mount**
   - `$HOME` is mounted inside the VM at the identical path (for example `/Users/you`) via virtiofs.
   - So `docker run -v "$PWD:/src"` works from anywhere under your home directory.
@@ -271,7 +270,7 @@ scripts/bench.sh          boot and network benchmark (restarts the VM)
 ## Troubleshooting
 
 - **`dockma start` says the binary lacks the entitlement.** You ran a plain `swift build`. Run `make build` or `make install`, then start again.
-- **`dockma start` times out or the daemon exits during startup.** `start` prints the relevant log tail. Check it in full with `dockma logs --daemon` and `dockma logs`.
+- **`dockma start` times out or the daemon exits during startup.** On a terminal, `start` and `stop` show the latest console and daemon log lines in a small live panel while they wait. On failure, `start` prints the relevant log tail. Check it in full with `dockma logs --daemon` and `dockma logs`.
 - **A guest image is missing.** Run `make guest install-guest`.
 - **`docker` talks to a different engine.** Check `echo $DOCKER_HOST` and `docker context show`.
 - **dockerd doesn't start and `dockma logs` says the data disk is not mounted.** The guest refuses to format a disk that holds data. `dockma shell` still works: run `dockma shell -- e2fsck -fy /dev/vda`, which can recover a damaged superblock from a backup copy, then `dockma restart`.
