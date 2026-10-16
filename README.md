@@ -1,24 +1,28 @@
 # dockma
 
-Docker on macOS in a minimal Linux VM.
+Run Docker on macOS using a lightweight virtual machine.
 
-dockma boots a small Linux VM with Apple's Virtualization.framework whose only job is to run the Docker Engine. The macOS `docker` CLI talks to that engine through a unix socket, and your home directory is shared into the VM. A small CLI starts and stops the VM and shows its logs.
+## Disclaimer: dockma is built using LLM-based tools. However, the code is reviewed by a human being. Also, this README is written and adjusted by a human.
 
-- **Minimal guest.**
+dockma runs a lightweight, minimal Linux VM with a custom-built kernel and leverages Apple's Virtualization.framework. This virtual machine runs in the background and provides the Docker Engine.
+The macOS `docker` CLI communicate to dockerd through a Unix socket. Your home directory is shared into the VM.
+
+## Features
+
+- **Lightweight guest OS.**
   - Kernel: a custom 6.18 LTS kernel built from `tinyconfig` plus only the drivers and features Docker needs. Everything is built in, with no modules. It is compiled with `-O2` and the regular SLUB allocator, not tinyconfig's size-first `-Os` and `SLUB_TINY`.
   - Userspace: a busybox initramfs containing Docker's static binaries and a small guest agent.
-  - It boots to a ready Docker engine in about a second.
-- **Home directory at the same path.**
+- **home directory mount**
   - `$HOME` is mounted inside the VM at the identical path (for example `/Users/you`) via virtiofs.
   - So `docker run -v "$PWD:/src"` works from anywhere under your home directory.
 - **Published ports on localhost.**
   - `docker run -p 8080:80 …` is reachable at `localhost:8080` (IPv4 and IPv6), with no manual forwarding.
   - The listener goes away when the container stops.
-- **amd64 images via Rosetta.**
+- **Run amd64 images via Rosetta.**
   - `docker run --platform linux/amd64 …` runs x86-64 images through Rosetta for Linux.
 - **Runs in the background.**
   - A per-user launchd job keeps the VM running after the CLI exits.
-  - It restarts the VM if the guest dies unexpectedly.
+  - It restarts the VM if the guest dies for some reason
 - **A shell in the VM.**
   - `dockma shell` opens a root shell inside the VM; `dockma shell -- <cmd>` runs a single command there.
   - It goes through the guest agent rather than Docker, so it still works when dockerd is broken.
@@ -26,7 +30,7 @@ dockma boots a small Linux VM with Apple's Virtualization.framework whose only j
   - `dockma stop` asks the guest to stop dockerd and power off cleanly.
   - Your images, containers and volumes persist on a sparse disk image.
 
-> **Status:** early and experimental. It has only been tested on Apple Silicon with macOS 27. Expect rough edges; see [Limitations](#limitations).
+> **Status:** early and experimental. It has only been tested on Apple Silicon with macOS 27. Expect rough edges; see [Limitations](#limitations). It is designed and optimized for Apple Silicon.
 
 ## Requirements
 
@@ -152,6 +156,7 @@ The directory and `logs/` are kept at mode 0700, and `data.img`, `config.json` a
 | `config.json` | Settings |
 | `data.img` | Sparse raw disk, ext4, mounted at `/var/lib/docker` in the guest |
 | `guest/Image`, `guest/initramfs.cpio.lz4` | Guest kernel and initramfs |
+| `guest/guest-protocol` | The host↔guest protocol number the guest was built for. `dockma start` refuses a guest that doesn't match. |
 | `logs/console.log` | Kernel and init output; the previous boot is kept as `console.log.1` |
 | `logs/docker.log` | dockerd output; the previous boot is kept as `docker.log.1` |
 | `logs/daemon.log` | Host daemon output; the previous run is kept as `daemon.log.1` |
@@ -170,7 +175,8 @@ dockma shell ► ~/.dockma/shell.sock  │                        │
             dockma daemon (launchd job io.dockma.daemon)      │
             owns the VZVirtualMachine                         │
               ├─ unix socket → vsock 1024 ───────────────────►├─► /var/run/docker.sock
-              ├─ control      ◄─ vsock 1025 (JSON lines) ────►├─  ports, time sync, shutdown
+              ├─ control      ◄─ vsock 1025 (JSON lines) ─────┤◄─ dialled by the agent: Docker ready,
+              │                                               │   ports, time sync, shutdown
               ├─ 127.0.0.1:P  → vsock 1026 (TCP tunnel) ─────►├─► 127.0.0.1:P (docker-proxy)
               └─ shell.sock   → vsock 1027 (shell frames) ───►└─► /bin/sh on a pty or pipes
 
@@ -184,8 +190,10 @@ dockma shell ► ~/.dockma/shell.sock  │                        │
 **Host side (Swift).** A `VZVirtualMachine` lives only as long as the process that created it, so `dockma start` installs a launchd job that runs `dockma daemon`. The daemon:
 - boots the VM;
 - serves `docker.sock` and `shell.sock`, piping each connection to the guest over vsock;
-- keeps a control connection to the guest agent;
+- accepts the control connection that the guest agent opens as soon as it runs;
 - mirrors the guest's published ports as listeners on the host.
+
+`start` installs the job, then waits on `control.sock`, woken by kqueue rather than polling. The daemon replies once the agent reports that dockerd's API answers. If the connection closes first, the daemon has exited, and `start` shows its log.
 
 `stop` unloads the launchd job. The daemon then asks the agent to power the guest off, and hard-stops the VM after 20 s if that doesn't finish. launchd restarts the daemon if the guest powers off on its own or crashes. It does not restart it after a requested stop or a startup error, so a broken setup doesn't end up in a restart loop.
 
@@ -199,6 +207,7 @@ dockma shell ► ~/.dockma/shell.sock  │                        │
 - **dockerd** runs with `firewall-backend: nftables`, so the guest ships `nft` instead of iptables and the kernel needs no xtables.
 - **`dockma-agent`** (Go):
   - proxies vsock to the Docker socket;
+  - dials the host's control port and reports when dockerd's API starts or stops answering. While dockerd is down it waits on inotify for the socket to appear rather than retrying;
   - watches the Docker events API for published TCP ports and reports them to the host;
   - dials tunnelled connections inside the VM;
   - runs `dockma shell` sessions. Each session uses a small framed protocol (start, stdin, resize, signal, started, stdout, stderr, exit, window) and runs on a pty or on pipes. `window` frames grant stdin credit, so a signal is never stuck behind stdin the command doesn't read;
