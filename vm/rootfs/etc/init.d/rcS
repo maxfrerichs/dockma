@@ -1,0 +1,63 @@
+#!/bin/sh
+# Brings the system up: pseudo filesystems, network, data disk, host shares.
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+log() { echo "dockma: $*"; }
+
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mountpoint -q /dev || mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts /dev/shm /dev/mqueue
+mount -t devpts -o gid=5,mode=620,ptmxmode=666 devpts /dev/pts
+mount -t tmpfs -o mode=1777 tmpfs /dev/shm
+mount -t mqueue mqueue /dev/mqueue
+mount -t tmpfs -o mode=0755 tmpfs /run
+mount -t tmpfs -o mode=1777 tmpfs /tmp
+mount -t cgroup2 -o nsdelegate cgroup2 /sys/fs/cgroup
+ln -sf /proc/self/fd /dev/fd
+ln -sf /proc/self/fd/0 /dev/stdin
+ln -sf /proc/self/fd/1 /dev/stdout
+ln -sf /proc/self/fd/2 /dev/stderr
+mkdir -p /var/run /var/lib/docker
+hostname dockma
+
+sysctl -q -w net.ipv4.ip_forward=1
+sysctl -q -w net.ipv6.conf.all.forwarding=1
+sysctl -q -w fs.inotify.max_user_watches=524288
+sysctl -q -w fs.inotify.max_user_instances=8192
+
+ip link set lo up
+ip link set eth0 up
+udhcpc -i eth0 -s /usr/share/udhcpc/default.script -t 20 -T 1 -A 2 -b || log "dhcp failed"
+
+# Persistent data disk, formatted on first boot and grown when the host
+# enlarged the image file.
+if [ -b /dev/vda ]; then
+	if ! blkid /dev/vda | grep -q 'TYPE="ext4"'; then
+		log "formatting data disk"
+		mke2fs -q -t ext4 -L dockma-data /dev/vda
+	fi
+	mount -t ext4 -o noatime /dev/vda /var/lib/docker
+	resize2fs /dev/vda >/dev/null 2>&1
+else
+	log "no data disk, /var/lib/docker is in RAM"
+fi
+
+# The host home directory is mounted at the same path it has on the host so
+# bind mounts like `-v $PWD:/src` resolve. The path is percent-encoded.
+home=$(sed -n 's/.*dockma\.home=\([^ ]*\).*/\1/p' /proc/cmdline)
+if [ -n "$home" ]; then
+	home=$(printf "$(echo "$home" | sed 's/%/\\x/g')")
+	mkdir -p "$home"
+	mount -t virtiofs home "$home" || log "home share not mounted"
+fi
+
+# Rosetta runs x86_64 binaries. The F flag opens the interpreter now, so it
+# also works inside containers that don't have /mnt/rosetta.
+mkdir -p /mnt/rosetta
+if mount -t virtiofs rosetta /mnt/rosetta 2>/dev/null; then
+	mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc
+	echo ':rosetta:M::\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00:\xff\xff\xff\xff\xff\xfe\xfe\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/mnt/rosetta/rosetta:CF' \
+		>/proc/sys/fs/binfmt_misc/register || log "rosetta binfmt registration failed"
+fi
+
+log "boot complete"

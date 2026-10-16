@@ -1,0 +1,4 @@
+::sysinit:/etc/init.d/rcS
+::respawn:/usr/bin/dockma-agent
+::respawn:/etc/init.d/dockerd
+::shutdown:/etc/init.d/shutdown

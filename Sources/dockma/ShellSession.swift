@@ -1,0 +1,167 @@
+import Foundation
+
+/// Client side of `dockma shell`: connects to the daemon's shell socket (which
+/// proxies to dockma-agent) and bridges the local terminal or pipes to a
+/// command in the VM.
+public final class ShellSession: @unchecked Sendable {
+    private let fd: Int32
+    private let tty: Bool
+    private let writeLock = NSLock()
+    private var signalSources: [DispatchSourceSignal] = []
+    private var savedTerminal: termios?
+
+    private init(fd: Int32, tty: Bool) {
+        self.fd = fd
+        self.tty = tty
+    }
+
+    /// Runs `argv` (a login shell when empty) and returns its exit code.
+    public static func run(paths: Paths, argv: [String], tty: Bool) throws -> Int32 {
+        let fd: Int32
+        do {
+            fd = try UnixSocket.connect(path: paths.shellSocket.path, timeoutSeconds: nil)
+        } catch {
+            if (try? ControlClient.status(paths: paths)) != nil {
+                throw DockmaError("the running dockma daemon predates `dockma shell`; run `dockma restart`")
+            }
+            throw DockmaError("dockma is not running (start it with `dockma start`)")
+        }
+        let session = ShellSession(fd: fd, tty: tty)
+        defer {
+            session.restoreTerminal()
+            close(fd)
+        }
+        return try session.run(argv: argv)
+    }
+
+    private func run(argv: [String]) throws -> Int32 {
+        let (rows, cols) = Self.terminalSize()
+        let term = ProcessInfo.processInfo.environment["TERM"] ?? "xterm-256color"
+        send(.start(ShellStart(argv: argv, tty: tty, rows: rows, cols: cols, term: term)))
+
+        if tty {
+            enterRawMode()
+            onSignal(SIGWINCH) { session in
+                let (rows, cols) = Self.terminalSize()
+                session.send(.resize(rows: rows, cols: cols))
+            }
+            // Raw mode turns ^C into a byte for the remote side; these only
+            // arrive from outside (kill, closing the terminal window).
+            for sig in [SIGTERM, SIGHUP] {
+                onSignal(sig) { session in
+                    session.restoreTerminal()
+                    exit(128 + sig)
+                }
+            }
+        } else {
+            for sig in [SIGINT, SIGTERM, SIGHUP] {
+                onSignal(sig) { session in session.send(.signal(sig)) }
+            }
+        }
+
+        Thread.detachNewThread { [self] in pumpStdin() }
+        return receive()
+    }
+
+    /// Copies local stdin into `stdin` frames, then signals EOF.
+    private func pumpStdin() {
+        var buffer = [UInt8](repeating: 0, count: 32 * 1024)
+        while true {
+            let n = buffer.withUnsafeMutableBytes { read(STDIN_FILENO, $0.baseAddress, $0.count) }
+            if n < 0 && errno == EINTR { continue }
+            if n <= 0 { break }
+            if !send(.stdin(Data(buffer[0..<n]))) { return }
+        }
+        send(.stdinEOF)
+    }
+
+    /// Writes remote output locally until the exit frame arrives.
+    private func receive() -> Int32 {
+        var decoder = ShellFrameDecoder()
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        var started = false
+        while true {
+            do {
+                while let frame = try decoder.next() {
+                    switch frame {
+                    case .started:
+                        started = true
+                    case .stdout(let data):
+                        writeAll(STDOUT_FILENO, data)
+                    case .stderr(let data):
+                        writeAll(STDERR_FILENO, data)
+                    case .exit(let code):
+                        return code
+                    case .error(let message):
+                        restoreTerminal()
+                        Self.printError("dockma shell: \(message)")
+                        return 255
+                    default:
+                        break
+                    }
+                }
+            } catch {
+                restoreTerminal()
+                Self.printError("dockma shell: \(error)")
+                return 255
+            }
+            let n = buffer.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
+            if n < 0 && errno == EINTR { continue }
+            if n <= 0 {
+                restoreTerminal()
+                if started {
+                    Self.printError("dockma shell: connection to the VM closed (VM stopped or restarted?)")
+                } else {
+                    // No `started` frame: the agent doesn't serve the shell port,
+                    // i.e. the guest image predates `dockma shell`.
+                    Self.printError("dockma shell: the VM closed the session at once (guest image older than the CLI? run `make guest install-guest` and `dockma restart`)")
+                }
+                return 255
+            }
+            decoder.append(Data(buffer[0..<n]))
+        }
+    }
+
+    @discardableResult
+    private func send(_ frame: ShellFrame) -> Bool {
+        guard let data = try? frame.encode() else { return false }
+        return writeLock.withLock { writeAll(fd, data) }
+    }
+
+    private func onSignal(_ sig: Int32, handler: @escaping @Sendable (ShellSession) -> Void) {
+        signal(sig, SIG_IGN)
+        let source = DispatchSource.makeSignalSource(signal: sig, queue: .global())
+        source.setEventHandler { [self] in handler(self) }
+        source.resume()
+        signalSources.append(source)
+    }
+
+    private func enterRawMode() {
+        guard isatty(STDIN_FILENO) == 1 else { return }
+        var original = termios()
+        guard tcgetattr(STDIN_FILENO, &original) == 0 else { return }
+        savedTerminal = original
+        var raw = original
+        cfmakeraw(&raw)
+        tcsetattr(STDIN_FILENO, TCSANOW, &raw)
+    }
+
+    private func restoreTerminal() {
+        guard var original = savedTerminal else { return }
+        tcsetattr(STDIN_FILENO, TCSANOW, &original)
+        savedTerminal = nil
+    }
+
+    /// The local terminal size, or 24x80 when output isn't a terminal.
+    static func terminalSize() -> (rows: UInt16, cols: UInt16) {
+        var size = winsize()
+        for fd in [STDOUT_FILENO, STDIN_FILENO] where ioctl(fd, TIOCGWINSZ, &size) == 0 && size.ws_row > 0 {
+            return (size.ws_row, size.ws_col)
+        }
+        return (24, 80)
+    }
+
+    private static func printError(_ message: String) {
+        FileHandle.standardError.write(Data((message + "\n").utf8))
+    }
+}

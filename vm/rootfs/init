@@ -1,0 +1,16 @@
+#!/busybox sh
+# Stage-0 init (rdinit=/init). runc can't pivot_root out of the initramfs
+# rootfs, so everything is moved into a tmpfs and init switch_roots into it.
+# A private busybox copy (/busybox) is used because /bin moves away mid-loop.
+/busybox mount -t devtmpfs devtmpfs /dev
+/busybox mkdir -p /newroot
+/busybox mount -t tmpfs -o mode=0755 tmpfs /newroot
+for entry in /*; do
+	case "$entry" in
+	/newroot | /dev | /init | /busybox) ;;
+	*) /busybox mv "$entry" /newroot/ ;;
+	esac
+done
+/busybox mkdir -p /newroot/dev
+/busybox mount --move /dev /newroot/dev
+exec /busybox switch_root /newroot /sbin/init

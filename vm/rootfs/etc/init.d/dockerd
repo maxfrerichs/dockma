@@ -1,0 +1,6 @@
+#!/bin/sh
+# Run by init (respawn). dockerd's log goes to the second console, which the
+# host writes to ~/.dockma/logs/docker.log. The pipe keeps dockerd from
+# seeing a TTY, so its log has no color escape codes.
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+dockerd --config-file /etc/docker/daemon.json 2>&1 | cat >/dev/hvc1

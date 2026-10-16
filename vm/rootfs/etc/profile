@@ -1,0 +1,3 @@
+# Login shell setup for `dockma shell`.
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PS1='dockma:\w# '
