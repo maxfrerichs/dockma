@@ -79,8 +79,10 @@ struct Start: ParsableCommand {
         }
 
         print("starting dockma...")
+        // Docker is pinged often because the guest boots in about a second.
+        // The daemon check spawns launchctl, so it keeps a slower pace.
         let deadline = Date().addingTimeInterval(TimeInterval(timeout))
-        let jobGraceDeadline = Date().addingTimeInterval(3)
+        var nextJobCheck = Date().addingTimeInterval(3)
         while Date() < deadline {
             if DockerPing.isResponding(socketPath: paths.dockerSocket.path) {
                 print("dockma is running; Docker socket: \(paths.dockerSocket.path)")
@@ -88,12 +90,15 @@ struct Start: ParsableCommand {
                 if let hint = DockerContext.hint(paths: paths) { print(hint) }
                 return
             }
-            if Date() > jobGraceDeadline, agent.state().pid == nil {
-                printError("the dockma daemon exited during startup:")
-                if let log = tail(paths.daemonLog, lines: 15) { printError(log) }
-                throw ExitCode.failure
+            if Date() > nextJobCheck {
+                if agent.state().pid == nil {
+                    printError("the dockma daemon exited during startup:")
+                    if let log = tail(paths.daemonLog, lines: 15) { printError(log) }
+                    throw ExitCode.failure
+                }
+                nextJobCheck = Date().addingTimeInterval(0.5)
             }
-            Thread.sleep(forTimeInterval: 0.5)
+            Thread.sleep(forTimeInterval: 0.05)
         }
         printError("Docker did not answer within \(timeout)s. Last console output:")
         if let log = tail(paths.consoleLog, lines: 20) { printError(log) }
