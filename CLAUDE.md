@@ -90,4 +90,4 @@ No linter or formatter is configured.
 - Every target enables the `ApproachableConcurrency` upcoming feature. Add it to any new target.
 - Pure helpers on `@MainActor` types that tests call are marked `nonisolated`.
 - Tests use **Swift Testing** (`import Testing`, `@Test`, `#expect`) with `@testable import dockma`.
-- Pinned guest versions are `ARG`s in `vm/Dockerfile`: kernel, Docker static bundle (with sha256), Alpine, Go.
+- Pinned guest versions are `ARG`s in `vm/Dockerfile`: kernel, Docker static bundle and moby's `check-config.sh` (each with sha256), Alpine, Go. Bumping `MOBY_VERSION` needs a new `CHECK_CONFIG_SHA256`.

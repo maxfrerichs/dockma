@@ -10,13 +10,17 @@ FROM ${ALPINE} AS kernel-src
 ARG KERNEL_VERSION=6.18.57
 ARG KERNEL_SHA256=5bd9acdc82ec5efc3790ae840e5aaa40dfde7efff261cf6dde902dc570acf98c
 ARG MOBY_VERSION=29.9.1
+# contrib/check-config.sh at the docker-v${MOBY_VERSION} tag; it runs in this
+# stage before the kernel is built, so it is pinned like the sources.
+ARG CHECK_CONFIG_SHA256=fda4343e9b50c47896653ca774ccbe9614bfcdb60f080d2b6277baf27efc0a71
 RUN apk add --no-cache build-base linux-headers bison flex bc perl openssl-dev elfutils-dev xz bash zstd
 WORKDIR /build
 RUN wget -q https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${KERNEL_VERSION}.tar.xz \
  && echo "${KERNEL_SHA256}  linux-${KERNEL_VERSION}.tar.xz" | sha256sum -c - \
  && tar xf linux-${KERNEL_VERSION}.tar.xz && rm linux-${KERNEL_VERSION}.tar.xz \
  && mv linux-${KERNEL_VERSION} linux \
- && wget -q -O /build/check-config.sh https://raw.githubusercontent.com/moby/moby/docker-v${MOBY_VERSION}/contrib/check-config.sh
+ && wget -q -O /build/check-config.sh https://raw.githubusercontent.com/moby/moby/docker-v${MOBY_VERSION}/contrib/check-config.sh \
+ && echo "${CHECK_CONFIG_SHA256}  /build/check-config.sh" | sha256sum -c -
 
 # The kernel's own cpio generator creates device nodes without mknod, which
 # BuildKit does not permit.
