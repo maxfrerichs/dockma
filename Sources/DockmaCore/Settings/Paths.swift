@@ -32,7 +32,8 @@ public struct Paths: Sendable {
     public var daemonLog: URL { logs.appendingPathComponent("daemon.log") }
     public var guest: URL { root.appendingPathComponent("guest", isDirectory: true) }
     public var kernel: URL { guest.appendingPathComponent("Image") }
-    public var initrd: URL { guest.appendingPathComponent("initramfs.cpio.zst") }
+    /// The guest initramfs: a cpio archive compressed with legacy-format lz4.
+    public var initrd: URL { guest.appendingPathComponent("initramfs.cpio.lz4") }
 
     /// Creates the state directories and keeps the root and logs private
     /// (0700) on every call, which also fixes older installs. The data disk

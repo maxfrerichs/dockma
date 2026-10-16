@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# Builds the dockma guest: an uncompressed arm64 kernel Image and a zstd
+# Builds the dockma guest: an uncompressed arm64 kernel Image and an lz4
 # initramfs. Build with `make guest`; outputs land in vm/out/.
 
 ARG ALPINE=alpine:3.24
@@ -72,7 +72,7 @@ RUN wget -q https://download.docker.com/linux/static/stable/aarch64/docker-${DOC
 
 # --- Root filesystem and initramfs -----------------------------------------
 FROM ${ALPINE} AS rootfs
-RUN apk add --no-cache busybox-static nftables e2fsprogs e2fsprogs-extra ca-certificates-bundle cpio zstd
+RUN apk add --no-cache busybox-static nftables e2fsprogs e2fsprogs-extra ca-certificates-bundle cpio lz4
 WORKDIR /rootfs
 # copy_bin copies a dynamically linked musl binary plus the libraries ldd lists.
 RUN mkdir -p bin sbin usr/bin usr/sbin lib usr/lib etc/ssl/certs proc sys dev run tmp root var/lib/docker mnt \
@@ -97,8 +97,8 @@ RUN chmod 0755 init etc/init.d/* usr/libexec/dockma-disk usr/libexec/dockma-motd
  && mkdir -p /out \
  && printf 'dir /dev 0755 0 0\nnod /dev/console 0600 0 0 c 5 1\nnod /dev/null 0666 0 0 c 1 3\n' > /tmp/devices \
  && { gen_init_cpio /tmp/devices; find . -mindepth 1 | sort | cpio -o -H newc --quiet; } \
-    | zstd -19 -T0 -q -o /out/initramfs.cpio.zst \
- && du -sh /rootfs /out/initramfs.cpio.zst
+    | lz4 -l -9 -q -c >/out/initramfs.cpio.lz4 \
+ && du -sh /rootfs /out/initramfs.cpio.lz4
 
 FROM scratch
 COPY --from=kernel /out/ /

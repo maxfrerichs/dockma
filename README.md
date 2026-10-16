@@ -5,7 +5,7 @@ Docker on macOS in a minimal Linux VM.
 dockma boots a small Linux VM with Apple's Virtualization.framework whose only job is to run the Docker Engine. The macOS `docker` CLI talks to that engine through a unix socket, and your home directory is shared into the VM. A small CLI starts and stops the VM and shows its logs.
 
 - **Minimal guest.**
-  - Kernel: a custom 6.18 LTS kernel built from `tinyconfig` plus only the drivers and features Docker needs. Everything is built in, with no modules.
+  - Kernel: a custom 6.18 LTS kernel built from `tinyconfig` plus only the drivers and features Docker needs. Everything is built in, with no modules. It is compiled with `-O2` and the regular SLUB allocator, not tinyconfig's size-first `-Os` and `SLUB_TINY`.
   - Userspace: a busybox initramfs containing Docker's static binaries and a small guest agent.
   - It boots to a ready Docker engine in about a second.
 - **Home directory at the same path.**
@@ -151,7 +151,7 @@ The directory and `logs/` are kept at mode 0700, and `data.img`, `config.json` a
 | `daemon.lock` | Held by the running daemon, so a second one can't boot another VM on the same disk |
 | `config.json` | Settings |
 | `data.img` | Sparse raw disk, ext4, mounted at `/var/lib/docker` in the guest |
-| `guest/Image`, `guest/initramfs.cpio.zst` | Guest kernel and initramfs |
+| `guest/Image`, `guest/initramfs.cpio.lz4` | Guest kernel and initramfs |
 | `logs/console.log` | Kernel and init output; the previous boot is kept as `console.log.1` |
 | `logs/docker.log` | dockerd output; the previous boot is kept as `docker.log.1` |
 | `logs/daemon.log` | Host daemon output; the previous run is kept as `daemon.log.1` |
@@ -205,10 +205,10 @@ dockma shell ► ~/.dockma/shell.sock  │                        │
   - steps the guest clock to host time every 30 s, which fixes drift after the Mac sleeps.
 
 **Guest image.** `vm/Dockerfile` builds everything reproducibly with pinned versions: kernel 6.18.57, Docker 29.9.1 and moby's `check-config.sh` (all sha256-checked), Alpine 3.24 and Go 1.27. It has two build gates:
-1. Every option in `vm/kernel/dockma.config` must survive `olddefconfig`.
+1. Every option in `vm/kernel/dockma.config` must survive `olddefconfig`, and every `# CONFIG_X is not set` line must stay disabled.
 2. The kernel config must pass moby's `check-config.sh` required list. The iptables-only options are exempt because of the nftables backend.
 
-The result is a 7.3 MB kernel and a 42 MB zstd initramfs that unpacks to about 163 MB in guest RAM.
+The result is an 8.6 MB kernel and a 65 MB lz4 initramfs that unpacks to about 163 MB in guest RAM. lz4 is larger than zstd (42 MB) but unpacks in about 75 ms instead of 185 ms, which is most of the kernel's boot time.
 
 ## Development
 
@@ -218,6 +218,7 @@ make test           # unit tests (Swift Testing)
 make e2e            # build, then scripts/e2e.sh against a real VM
 make guest          # rebuild the guest; also runs the agent's go vet / go test
 make install-guest  # copy the rebuilt guest to ~/.dockma/guest
+scripts/bench.sh    # boot and network benchmark; restarts the VM RUNS times (default 5)
 ```
 
 `scripts/e2e.sh` pins `DOCKER_HOST` to dockma's socket and checks:
@@ -255,6 +256,7 @@ vm/rootfs/                init scripts, inittab, dockerd config, DHCP hook
 vm/agent/                 dockma-agent (Go) with tests
 vm/tests/                 guest script tests, run during the guest build
 scripts/e2e.sh            end-to-end test
+scripts/bench.sh          boot and network benchmark (restarts the VM)
 ```
 
 ## Troubleshooting

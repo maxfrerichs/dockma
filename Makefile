@@ -34,9 +34,9 @@ test:
 guest:
 	$(DOCKER) buildx build --platform linux/arm64 --output type=local,dest=vm/out vm
 
-install-guest: vm/out/Image vm/out/initramfs.cpio.zst
+install-guest: vm/out/Image vm/out/initramfs.cpio.lz4
 	mkdir -p $(GUEST_DIR)
-	cp vm/out/Image vm/out/initramfs.cpio.zst $(GUEST_DIR)/
+	cp vm/out/Image vm/out/initramfs.cpio.lz4 $(GUEST_DIR)/
 
 e2e: build
 	DOCKMA=$(BIN) scripts/e2e.sh

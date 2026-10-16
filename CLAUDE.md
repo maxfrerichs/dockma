@@ -49,10 +49,11 @@ The core library lives in `Sources/DockmaCore/`, grouped by area. Rows from Daem
 ```sh
 make build                # swift build + ad-hoc codesign with dockma.entitlements (required to run the VM)
 make install              # signed release binary → ~/.local/bin/dockma (PREFIX=...)
-make guest                # build vm/out/{Image,initramfs.cpio.zst} with any arm64 docker (buildx)
+make guest                # build vm/out/{Image,initramfs.cpio.lz4} with any arm64 docker (buildx)
 make install-guest        # copy guest artifacts to ~/.dockma/guest/
 make test                 # swift test (Swift Testing)
 make e2e                  # build + scripts/e2e.sh against a real VM (starts/restarts/stops the user's VM)
+scripts/bench.sh          # boot time with a phase breakdown, plus network throughput (restarts the user's VM RUNS times; RUNS=0 for network only)
 swift test --filter DockmaCoreTests.planIsEmptyWhenNothingChanged   # one test
 ```
 
@@ -78,7 +79,7 @@ No linter or formatter is configured.
 - **`launchctl bootout` returns before the daemon exits.** `LaunchAgent.bootout()` polls until the job is gone.
 - **Guest consoles are TTYs.** Logs arrive with `\r\n` line endings, which Swift treats as a single Character, so split them with `isNewline`.
 - **Kernel config gates in the Dockerfile.**
-  - Every option in `vm/kernel/dockma.config` must survive `olddefconfig`. A dropped option means an unmet dependency.
+  - Every option in `vm/kernel/dockma.config` must survive `olddefconfig`. A dropped option means an unmet dependency. Every `# CONFIG_X is not set` line must stay disabled; another option's `select` can turn it back on.
   - `vm/kernel/check-docker-config.sh` enforces moby's required list. It exempts the iptables/xtables options because dockerd runs with `firewall-backend: nftables`, which needs the `nft` binary.
 - **Stage-0 `/init` moves the initramfs into a tmpfs and runs `switch_root`.** runc can't `pivot_root` out of rootfs.
 - **BuildKit forbids `mknod`.** Device nodes come from the kernel's `gen_init_cpio`.
