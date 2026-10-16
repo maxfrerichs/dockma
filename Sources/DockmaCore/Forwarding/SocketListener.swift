@@ -74,7 +74,11 @@ public final class SocketListener: @unchecked Sendable {
                 bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
-        guard rc == 0 else { close(fd); throw DockmaError.posix("bind \(path)") }
+        guard rc == 0 else {
+            let error = DockmaError.posix("bind \(path)")
+            close(fd)
+            throw error
+        }
         chmod(path, 0o600)
         return try finish(fd: fd, description: path, unixPath: path, handler: handler)
     }
