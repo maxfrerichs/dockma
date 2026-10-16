@@ -80,7 +80,7 @@ def expect(pattern, timeout=10):
             buf = buf[m.end():]
             return m
     sys.exit(f"timed out waiting for {pattern!r}, got {buf[-200:]!r}")
-expect(rb"kernel \d+\.\d+")  # the motd's status line
+expect(rb"Linux \d+\.\d+")  # the motd's status line
 expect(rb"dockma:~# ")
 os.write(fd, b"tty\n"); expect(rb"/dev/pts/\d+"); expect(rb"dockma:~# ")
 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0)); os.kill(pid, signal.SIGWINCH); time.sleep(0.5)

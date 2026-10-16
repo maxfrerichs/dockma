@@ -22,7 +22,7 @@ i=0
 while [ "$i" -lt 20 ]; do
 	out=$(TERM=xterm "$busybox" sh "$script")
 	case $out in
-	*kernel\ *) ;;
+	*Linux\ *) ;;
 	*) echo "FAIL: run $i printed no status line: $out"; exit 1 ;;
 	esac
 	i=$((i + 1))
