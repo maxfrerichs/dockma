@@ -51,20 +51,25 @@ public enum ControlClient {
 public enum ControlServer {
     public static func listen(path: String, respond: @escaping @MainActor (ControlRequest) -> Data?) throws -> SocketListener {
         try SocketListener.unix(path: path) { client in
-            var timeout = timeval(tv_sec: 5, tv_usec: 0)
-            setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-            guard let line = LineReader(fd: client).readLine(),
-                  let request = try? JSONDecoder().decode(ControlRequest.self, from: line)
-            else {
-                close(client)
-                return
-            }
-            Task { @MainActor in
-                if var reply = respond(request) {
-                    reply.append(UInt8(ascii: "\n"))
-                    writeAll(client, reply)
+            // Read off the accept loop, so a client that sends nothing can't
+            // hold up the others for the 5 s timeout.
+            DispatchQueue.global().async {
+                var timeout = timeval(tv_sec: 5, tv_usec: 0)
+                setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+                setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+                guard let line = LineReader(fd: client).readLine(),
+                      let request = try? JSONDecoder().decode(ControlRequest.self, from: line)
+                else {
+                    close(client)
+                    return
                 }
-                close(client)
+                Task { @MainActor in
+                    if var reply = respond(request) {
+                        reply.append(UInt8(ascii: "\n"))
+                        writeAll(client, reply)
+                    }
+                    close(client)
+                }
             }
         }
     }
