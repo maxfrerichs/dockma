@@ -13,6 +13,10 @@ public enum Subprocess {
     @discardableResult
     public static func run(_ executable: String, arguments: [String]) throws -> SubprocessResult {
         let process = Process()
+        // waitUntilExit() spins the run loop in slices and added about 70 ms
+        // to every call; the termination handler fires on the exit itself.
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         let out = Pipe()
@@ -32,7 +36,7 @@ public enum Subprocess {
         }
         let stdoutData = out.fileHandleForReading.readDataToEndOfFile()
         stderrDone.wait()
-        process.waitUntilExit()
+        exited.wait()
         return SubprocessResult(
             status: process.terminationStatus,
             stdout: String(decoding: stdoutData, as: UTF8.self),
