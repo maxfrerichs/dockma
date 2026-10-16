@@ -28,6 +28,8 @@ import Testing
     Config(cpus: 0),
     Config(memoryMiB: 256),
     Config(diskGiB: 1),
+    Config(memoryMiB: .max),
+    Config(diskGiB: .max),
     Config(portBindAddress: "localhost"),
 ])
 func configRejectsInvalidValues(config: Config) {

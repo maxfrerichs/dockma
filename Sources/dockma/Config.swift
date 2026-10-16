@@ -50,6 +50,9 @@ public struct Config: Codable, Equatable, Sendable {
         guard cpus >= 1 else { throw DockmaError("cpus must be at least 1") }
         guard memoryMiB >= 512 else { throw DockmaError("memoryMiB must be at least 512") }
         guard diskGiB >= 4 else { throw DockmaError("diskGiB must be at least 4") }
+        // Upper bounds keep the byte sizes the VM is built with from overflowing.
+        guard memoryMiB <= UInt64.max >> 20 else { throw DockmaError("memoryMiB is too large: \(memoryMiB)") }
+        guard diskGiB <= 65536 else { throw DockmaError("diskGiB must be at most 65536 (64 TiB)") }
         guard IPAddress(portBindAddress) != nil else {
             throw DockmaError("portBindAddress must be an IPv4 or IPv6 address: \(portBindAddress)")
         }
