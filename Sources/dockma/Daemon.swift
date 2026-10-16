@@ -161,7 +161,12 @@ public final class Daemon {
                 warnings: warnings)
             return try? JSONEncoder().encode(status)
         case .stop:
-            requestStop()
+            // requestStop() can exit at once (VM not running yet), so defer it:
+            // the reply is written in this same main-actor job, before the
+            // queued block can run.
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated { self?.requestStop() }
+            }
             return Data("{}".utf8)
         }
     }
