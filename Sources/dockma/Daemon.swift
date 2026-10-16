@@ -18,6 +18,7 @@ public final class Daemon {
     private var state: DaemonStatus.State = .starting
     private var stopRequested = false
     private var warnings: [String] = []
+    private var lockFD: Int32 = -1
     private let startedAt = Date()
 
     public init(paths: Paths) {
@@ -27,6 +28,16 @@ public final class Daemon {
     /// Starts everything; the caller must then run the main run loop.
     /// Exits the process when the VM stops.
     public func start() {
+        // The order matters: a second instance must exit on the lock before
+        // it rotates the running daemon's log or touches its sockets.
+        do {
+            try paths.createDirectories()
+            lockFD = try Self.acquireLock(at: paths.daemonLock)
+        } catch {
+            Log.info("startup failed: \(error)")
+            exit(0)
+        }
+
         signal(SIGPIPE, SIG_IGN)
         for sig in [SIGTERM, SIGINT] {
             signal(sig, SIG_IGN)
@@ -52,7 +63,6 @@ public final class Daemon {
     }
 
     private func boot() throws {
-        try paths.createDirectories()
         try Paths.validateSocketPath(paths.dockerSocket)
         try Paths.validateSocketPath(paths.controlSocket)
         try Paths.validateSocketPath(paths.shellSocket)
@@ -225,6 +235,22 @@ public final class Daemon {
             throw DockmaError("cannot create \(url.path)")
         }
         return try FileHandle(forWritingTo: url)
+    }
+
+    /// Takes an exclusive lock that is held for the life of the process, so a
+    /// second daemon (say `dockma daemon` by hand next to the launchd job)
+    /// can't boot another VM on the same data disk. Returns the descriptor.
+    nonisolated static func acquireLock(at url: URL) throws -> Int32 {
+        let fd = open(url.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw posixError("open \(url.path)") }
+        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
+            let error = errno == EWOULDBLOCK
+                ? DockmaError("another dockma daemon is running (\(url.path) is locked)")
+                : posixError("lock \(url.path)")
+            close(fd)
+            throw error
+        }
+        return fd
     }
 
     /// A random locally administered unicast MAC address.

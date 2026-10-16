@@ -6,7 +6,7 @@ import dockma
 struct Dockma: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "dockma",
-        abstract: "Docker on macOS in a minimal Linux VM.",
+        abstract: "Docker on macOS through a minimal Linux VM.",
         subcommands: [Start.self, Stop.self, Restart.self, Status.self, ShellCommand.self, Logs.self, ConfigCommand.self, Delete.self, DaemonCommand.self])
 }
 
@@ -70,6 +70,10 @@ struct Start: ParsableCommand {
             job = agent.state()
         }
         if !job.loaded {
+            if (try? ControlClient.status(paths: paths)) != nil {
+                print("dockma is already running (started outside launchd with `dockma daemon`)")
+                return
+            }
             try agent.install(autostart: config.autostart)
         }
 

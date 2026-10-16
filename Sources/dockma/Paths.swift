@@ -24,6 +24,8 @@ public struct Paths: Sendable {
     public var dockerSocket: URL { root.appendingPathComponent("docker.sock") }
     public var controlSocket: URL { root.appendingPathComponent("control.sock") }
     public var shellSocket: URL { root.appendingPathComponent("shell.sock") }
+    /// Held (flock) by the running daemon.
+    public var daemonLock: URL { root.appendingPathComponent("daemon.lock") }
     public var logs: URL { root.appendingPathComponent("logs", isDirectory: true) }
     public var consoleLog: URL { logs.appendingPathComponent("console.log") }
     public var dockerLog: URL { logs.appendingPathComponent("docker.log") }

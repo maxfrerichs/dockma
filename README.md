@@ -146,6 +146,7 @@ The directory and `logs/` are kept at mode 0700, and `data.img`, `config.json` a
 | `docker.sock` | Docker API socket for the macOS `docker` CLI |
 | `control.sock` | CLI ↔ daemon control socket |
 | `shell.sock` | Shell sessions (`dockma shell`), proxied to the guest agent |
+| `daemon.lock` | Held by the running daemon, so a second one can't boot another VM on the same disk |
 | `config.json` | Settings |
 | `data.img` | Sparse raw disk, ext4, mounted at `/var/lib/docker` in the guest |
 | `guest/Image`, `guest/initramfs.cpio.zst` | Guest kernel and initramfs |
