@@ -41,7 +41,7 @@ The core library lives in `Sources/DockmaCore/`, grouped by area. Rows from Daem
 | CLI commands | `Sources/DockmaCLI/Dockma.swift` — all subcommands, plus log tailing and following |
 | Daemon lifecycle | `Daemon/Daemon.swift` — boot, signal handling, graceful stop, exit codes, time sync, log rotation |
 | VM | `VM/VMConfigurationBuilder.swift` (devices, data disk, `GuestImage` protocol check), `VM/VMHost.swift` (VZ wrapper, vsock connect), `VM/KernelCmdline.swift`, `VM/Entitlements.swift` |
-| Forwarding | `Forwarding/` — `SocketListener` (unix/TCP accept via dispatch source), `SocketCopier` (bidirectional copy with half-close), `VsockSocketProxy` (unix socket → agent vsock port; docker and shell), `PortForwarder` (reconciles the agent's port set into listeners) |
+| Forwarding | `Forwarding/` — `SocketListener` (unix/TCP accept via dispatch source; optional loopback-only peer filter), `SocketCopier` (bidirectional copy with half-close), `VsockSocketProxy` (unix socket → agent vsock port; docker and shell), `PortForwarder` (reconciles the agent's port set into listeners; loopback ports below 1024 bind the wildcard and admit only loopback peers, because macOS refuses the non-root loopback bind) |
 | Shell client | `Shell/ShellProtocol.swift` (frames, incremental decoder), `Shell/ShellSession.swift` (raw TTY, SIGWINCH, signal forwarding, stdin/output pumps) |
 | Agent link | `Agent/AgentClient.swift` (accepts the agent's control connection, tracks Docker readiness), `Agent/AgentProtocol.swift` |
 | launchd and CLI↔daemon | `Daemon/LaunchAgent.swift`, `Daemon/ControlProtocol.swift` (also `UnixSocket`, `DockerPing`) |

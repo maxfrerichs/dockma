@@ -11,12 +11,12 @@ public final class PortForwarder {
     }
 
     private let host: VMHost
-    private let bindAddresses: [IPAddress]
+    private let bindAddress: String
     private var forwards: [UInt16: Forward] = [:]
 
     public init(host: VMHost, bindAddress: String) {
         self.host = host
-        bindAddresses = Self.bindAddresses(for: bindAddress)
+        self.bindAddress = bindAddress
     }
 
     public var ports: [UInt16] { forwards.keys.sorted() }
@@ -30,6 +30,29 @@ public final class PortForwarder {
         default: nil
         }
         return [address, extra].compactMap { $0 }.compactMap(IPAddress.init)
+    }
+
+    /// A host address to listen on, and whether its listener admits only
+    /// loopback peers.
+    public struct ListenAddress: Equatable, Sendable {
+        /// The address to bind.
+        public var address: IPAddress
+        /// Whether connections from non-loopback peers are closed on accept.
+        public var acceptsOnlyLoopback: Bool
+    }
+
+    /// The addresses to listen on for `port`. macOS refuses a non-root bind
+    /// below 1024 to a loopback address but allows the wildcard, so such a
+    /// port binds the wildcard of the same family and admits only loopback
+    /// peers.
+    nonisolated static func listenAddresses(for bindAddress: String, port: UInt16) -> [ListenAddress] {
+        bindAddresses(for: bindAddress).map { address in
+            if port < 1024 && address.isLoopback {
+                ListenAddress(address: address.unspecified, acceptsOnlyLoopback: true)
+            } else {
+                ListenAddress(address: address, acceptsOnlyLoopback: false)
+            }
+        }
     }
 
     /// The listener changes that `plan(current:desired:)` computes.
@@ -51,6 +74,7 @@ public final class PortForwarder {
         return Plan(toOpen: open, toClose: close)
     }
 
+    /// Opens and closes listeners so the forwarded ports match `desired`.
     public func update(_ desired: [ForwardedPort]) {
         let plan = Self.plan(current: forwards.mapValues(\.target), desired: desired)
         for port in plan.toClose {
@@ -58,9 +82,10 @@ public final class PortForwarder {
             Log.info("unforwarded port \(port)")
         }
         for forward in plan.toOpen {
-            let listeners = bindAddresses.compactMap { address -> SocketListener? in
+            let listeners = Self.listenAddresses(for: bindAddress, port: forward.port).compactMap { listen -> SocketListener? in
                 do {
-                    return try SocketListener.tcp(address: address, port: forward.port) { [host, target = forward.target] client in
+                    return try SocketListener.tcp(address: listen.address, port: forward.port,
+                                                  acceptsOnlyLoopback: listen.acceptsOnlyLoopback) { [host, target = forward.target] client in
                         Task { @MainActor in
                             await Self.tunnel(client: client, target: target, host: host)
                         }

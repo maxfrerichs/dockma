@@ -9,15 +9,23 @@ public final class SocketListener: @unchecked Sendable {
     private let source: DispatchSourceRead
     private let unixPath: String?
 
-    private init(fd: Int32, description: String, unixPath: String?, handler: @escaping @Sendable (Int32) -> Void) {
+    /// Starts accepting on `fd`. With `acceptsOnlyLoopback`, connections from
+    /// a non-loopback peer are closed without reaching `handler`.
+    private init(fd: Int32, description: String, unixPath: String?, acceptsOnlyLoopback: Bool,
+                 handler: @escaping @Sendable (Int32) -> Void) {
         self.fd = fd
         self.description = description
         self.unixPath = unixPath
         source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .global())
         let spare = SpareDescriptor()
-        source.setEventHandler { [fd, spare, description] in
+        let filter = acceptsOnlyLoopback ? LoopbackFilter() : nil
+        source.setEventHandler { [fd, spare, filter, description] in
             while true {
-                let client = accept(fd, nil, nil)
+                var peer = sockaddr_storage()
+                var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
+                let client = withUnsafeMutablePointer(to: &peer) {
+                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { accept(fd, $0, &length) }
+                }
                 if client < 0 {
                     switch errno {
                     case EINTR, ECONNABORTED:
@@ -32,6 +40,10 @@ public final class SocketListener: @unchecked Sendable {
                     return
                 }
                 spare.didAccept()
+                if let filter, !filter.admits(peer, on: description) {
+                    close(client)
+                    continue
+                }
                 // macOS accepted sockets inherit O_NONBLOCK; the copiers block.
                 _ = fcntl(client, F_SETFL, fcntl(client, F_GETFL) & ~O_NONBLOCK)
                 var on: Int32 = 1
@@ -80,11 +92,14 @@ public final class SocketListener: @unchecked Sendable {
             throw error
         }
         chmod(path, 0o600)
-        return try finish(fd: fd, description: path, unixPath: path, handler: handler)
+        return try finish(fd: fd, description: path, unixPath: path, acceptsOnlyLoopback: false, handler: handler)
     }
 
-    /// Listens on TCP `address:port`.
-    public static func tcp(address: IPAddress, port: UInt16, handler: @escaping @Sendable (Int32) -> Void) throws -> SocketListener {
+    /// Listens on TCP `address:port`. With `acceptsOnlyLoopback`, connections
+    /// whose peer isn't a loopback address are closed on accept, which lets a
+    /// wildcard bind stand in for a loopback one.
+    public static func tcp(address: IPAddress, port: UInt16, acceptsOnlyLoopback: Bool = false,
+                           handler: @escaping @Sendable (Int32) -> Void) throws -> SocketListener {
         let fd: Int32
         let rc: Int32
         let description: String
@@ -102,10 +117,7 @@ public final class SocketListener: @unchecked Sendable {
             rc = withUnsafePointer(to: &addr) {
                 $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
             }
-            var text = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
-            var copy = a
-            inet_ntop(AF_INET, &copy, &text, socklen_t(text.count))
-            description = "\(cString(text)):\(port)"
+            description = "\(address):\(port)"
         case .v6(let a):
             fd = socket(AF_INET6, SOCK_STREAM, 0)
             guard fd >= 0 else { throw DockmaError.posix("socket") }
@@ -119,27 +131,47 @@ public final class SocketListener: @unchecked Sendable {
             rc = withUnsafePointer(to: &addr) {
                 $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in6>.size)) }
             }
-            var text = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
-            var copy = a
-            inet_ntop(AF_INET6, &copy, &text, socklen_t(text.count))
-            description = "[\(cString(text))]:\(port)"
+            description = "[\(address)]:\(port)"
         }
         guard rc == 0 else {
             let error = DockmaError.posix("bind \(description)")
             close(fd)
             throw error
         }
-        return try finish(fd: fd, description: description, unixPath: nil, handler: handler)
+        return try finish(fd: fd, description: acceptsOnlyLoopback ? "\(description) (loopback only)" : description,
+                          unixPath: nil, acceptsOnlyLoopback: acceptsOnlyLoopback, handler: handler)
     }
 
-    private static func finish(fd: Int32, description: String, unixPath: String?, handler: @escaping @Sendable (Int32) -> Void) throws -> SocketListener {
+    /// Starts listening on the bound `fd` and wraps it in a listener.
+    private static func finish(fd: Int32, description: String, unixPath: String?, acceptsOnlyLoopback: Bool,
+                               handler: @escaping @Sendable (Int32) -> Void) throws -> SocketListener {
         guard listen(fd, 128) == 0 else {
             let error = DockmaError.posix("listen \(description)")
             close(fd)
             throw error
         }
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
-        return SocketListener(fd: fd, description: description, unixPath: unixPath, handler: handler)
+        return SocketListener(fd: fd, description: description, unixPath: unixPath,
+                              acceptsOnlyLoopback: acceptsOnlyLoopback, handler: handler)
+    }
+}
+
+/// Admits only loopback peers, logging the first rejection on a listener so
+/// a port scan can't flood the log. Only one source's handlers use it, and
+/// dispatch never runs those concurrently.
+private final class LoopbackFilter: @unchecked Sendable {
+    private var hasLoggedRejection = false
+
+    /// Whether `peer` is a loopback address; logs the first one that isn't.
+    func admits(_ peer: sockaddr_storage, on description: String) -> Bool {
+        let address = IPAddress(socketAddress: peer)
+        if address?.isLoopback == true { return true }
+        if !hasLoggedRejection {
+            hasLoggedRejection = true
+            Log.info("closed a connection from \(address.map(String.init(describing:)) ?? "an unknown peer") on \(description): "
+                + "only loopback peers are admitted (further rejections are not logged)")
+        }
+        return false
     }
 }
 
@@ -178,8 +210,4 @@ private final class SpareDescriptor: @unchecked Sendable {
             fd = -1
         }
     }
-}
-
-private func cString(_ buffer: [CChar]) -> String {
-    String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
 }

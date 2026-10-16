@@ -17,6 +17,12 @@ The macOS `docker` CLI communicate to dockerd through a Unix socket. Your home d
 - **Published ports on localhost.**
   - `docker run -p 8080:80 …` is reachable at `localhost:8080` (IPv4 and IPv6), with no manual forwarding.
   - The listener goes away when the container stops.
+  - Ports below 1024, such as DDEV's router on 80 and 443, work too. macOS lets a non-root process bind them only on the wildcard address, so with the default `127.0.0.1` the daemon listens on `0.0.0.0` and `::` and closes any connection that isn't from a loopback address.
+    - Other machines can't use the port, but a port scan from the network sees it as open, because the TCP handshake completes before the close.
+    - Anything else listening on `*:80` conflicts with it.
+    - A process running as root that holds `127.0.0.1:80` itself takes precedence: dockma's listener starts without error but receives none of that traffic.
+    - The daemon logs the first connection it closes on each listener, so `dockma logs --daemon` shows why a remote client was reset.
+    - macOS may ask whether `dockma` may accept incoming connections. The listener stays loopback-only whatever you answer.
 - **Run amd64 images via Rosetta.**
   - `docker run --platform linux/amd64 …` runs x86-64 images through Rosetta for Linux.
 - **Runs in the background.**
@@ -134,7 +140,7 @@ Use it to inspect the VM, for example `ps`, `mount`, `nft list ruleset` and `cat
 | `--cpus <n>` | half the host's cores (min. 2) | Virtual CPUs |
 | `--memory <MiB>` | `4096` | Guest memory |
 | `--disk <GiB>` | `64` | Size of the sparse data disk. It can only grow; the guest grows the filesystem on boot. |
-| `--port-bind-address <ip>` | `127.0.0.1` | Host address that published ports bind to. With `127.0.0.1` they're also bound on `::1`; with `0.0.0.0`, also on `::`. Use `0.0.0.0` to expose them to your network. |
+| `--port-bind-address <ip>` | `127.0.0.1` | Host address that published ports bind to. With `127.0.0.1` they're also bound on `::1`; with `0.0.0.0`, also on `::`. Use `0.0.0.0` to expose them to your network. With a loopback address, ports below 1024 bind the wildcard and accept only loopback peers. |
 | `--rosetta <bool>` | `true` | Attach Rosetta for amd64 images |
 | `--autostart <bool>` | `false` | Start dockma at login. This installs the launchd plist into `~/Library/LaunchAgents`. |
 

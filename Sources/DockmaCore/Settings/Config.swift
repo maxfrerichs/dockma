@@ -77,7 +77,7 @@ public struct Config: Codable, Equatable, Sendable {
 }
 
 /// A parsed numeric IP address, used for bind addresses.
-public enum IPAddress: Equatable, Sendable {
+public enum IPAddress: Equatable, Sendable, CustomStringConvertible {
     case v4(in_addr)
     case v6(in6_addr)
 
@@ -93,6 +93,51 @@ public enum IPAddress: Equatable, Sendable {
             return
         }
         return nil
+    }
+
+    /// The address of an IPv4 or IPv6 socket address, such as an accepted peer;
+    /// nil for other families.
+    public init?(socketAddress storage: sockaddr_storage) {
+        var storage = storage
+        switch Int32(storage.ss_family) {
+        case AF_INET:
+            self = withUnsafeBytes(of: &storage) { .v4($0.load(as: sockaddr_in.self).sin_addr) }
+        case AF_INET6:
+            self = withUnsafeBytes(of: &storage) { .v6($0.load(as: sockaddr_in6.self).sin6_addr) }
+        default:
+            return nil
+        }
+    }
+
+    /// Whether this is a loopback address: `127.0.0.0/8`, `::1`, or an
+    /// IPv4-mapped `::ffff:127.x.x.x`.
+    public var isLoopback: Bool {
+        switch self {
+        case .v4(let a):
+            return UInt32(bigEndian: a.s_addr) >> 24 == 127
+        case .v6(let a):
+            let bytes = withUnsafeBytes(of: a) { Array($0) }
+            if bytes[0..<15].allSatisfy({ $0 == 0 }) && bytes[15] == 1 { return true }
+            return bytes[0..<10].allSatisfy { $0 == 0 } && bytes[10] == 0xff && bytes[11] == 0xff && bytes[12] == 127
+        }
+    }
+
+    /// The address in its standard text form, such as `127.0.0.1` or `::1`.
+    public var description: String {
+        var text = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+        switch self {
+        case .v4(var a): inet_ntop(AF_INET, &a, &text, socklen_t(text.count))
+        case .v6(var a): inet_ntop(AF_INET6, &a, &text, socklen_t(text.count))
+        }
+        return String(decoding: text.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+    }
+
+    /// The unspecified (wildcard) address of the same family: `0.0.0.0` or `::`.
+    public var unspecified: IPAddress {
+        switch self {
+        case .v4: .v4(in_addr(s_addr: 0))
+        case .v6: .v6(in6_addr())
+        }
     }
 
     public static func == (lhs: IPAddress, rhs: IPAddress) -> Bool {
