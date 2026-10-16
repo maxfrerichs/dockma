@@ -86,9 +86,10 @@ COPY --from=docker /out/ usr/bin/
 COPY --from=agent /out/dockma-agent usr/bin/dockma-agent
 COPY rootfs/ ./
 COPY tests/ /tests/
-RUN chmod 0755 init etc/init.d/* usr/libexec/dockma-disk usr/share/udhcpc/default.script \
+RUN chmod 0755 init etc/init.d/* usr/libexec/dockma-disk usr/libexec/dockma-motd usr/share/udhcpc/default.script \
  && usr/sbin/nft --version && sbin/mke2fs -V && sbin/e2fsck -V \
  && sh /tests/dockma-disk-test.sh /rootfs/usr/libexec/dockma-disk /rootfs/bin/busybox \
+ && sh /tests/dockma-motd-test.sh /rootfs/usr/libexec/dockma-motd /rootfs/bin/busybox \
  && mkdir -p /out \
  && printf 'dir /dev 0755 0 0\nnod /dev/console 0600 0 0 c 5 1\nnod /dev/null 0666 0 0 c 1 3\n' > /tmp/devices \
  && { gen_init_cpio /tmp/devices; find . -mindepth 1 | sort | cpio -o -H newc --quiet; } \

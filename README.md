@@ -110,6 +110,8 @@ $ dockma shell -- sh -c 'ls /var/lib/docker' | wc -l
 $ echo data | dockma shell -- cat   # stdin is forwarded
 ```
 
+The interactive shell greets you with the Docker whale saying a random quip, whalesay style, followed by a status line: kernel, uptime and data disk usage. `dockma shell -- cmd` prints only the command's output. To list every quip, run `dockma shell -- /usr/libexec/dockma-motd --all`.
+
 TTY handling follows ssh:
 - `dockma shell` gets a pseudo-terminal when stdin is a terminal. Window resizes are forwarded, and Ctrl-C reaches remote programs.
 - `dockma shell -- cmd` uses plain pipes. stdout and stderr stay separate, and Ctrl-C is forwarded to the command as SIGINT.

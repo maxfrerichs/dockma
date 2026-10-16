@@ -1,0 +1,79 @@
+#!/bin/sh
+# Message of the day for interactive `dockma shell` sessions: the Docker whale
+# saying a random quip, whalesay style, and one line of VM status.
+# /etc/profile runs it.
+# Usage: dockma-motd [--all]
+# --all prints the whale and every quip, uncoloured, and no status.
+
+# The Docker logo without its lettering (gist.github.com/dhrp/5733652), under
+# a whalesay-style speech bubble.
+whale() {
+	cat <<'EOF'
+    \
+     \
+      \
+                    ##        .
+              ## ## ##       ==
+           ## ## ## ##      ===
+       /""""""""""""""""\___/ ===
+  ~~~ {~~ ~~~~ ~~~ ~~~~ ~~ ~ /  ===- ~~~
+       \______ o          __/
+         \    \        __/
+          \____\______/
+EOF
+}
+
+# One quip per line. The bubble adds four columns, so each fits in 76.
+quips() {
+	cat <<'EOF'
+god save the whales
+a whale a day keeps the doctor away
+fck nzs
+https://www.greenpeace.de/spenden/meeresschutz
+1312
+
+EOF
+}
+
+if [ "${1-}" = --all ]; then
+	whale
+	quips
+	exit 0
+fi
+
+# A random 16-bit number; the zero only matters if /dev/urandom fails.
+set -- $(od -An -N2 -tu2 /dev/urandom 2>/dev/null) 0
+count=$(quips | wc -l)
+quip=$(quips | sed -n "$(($1 % count + 1))p")
+
+blue='' reset=''
+if [ "${TERM:-dumb}" != dumb ]; then
+	blue='\033[34m' reset='\033[0m'
+fi
+
+uptime=
+if read -r seconds _ 2>/dev/null </proc/uptime; then
+	seconds=${seconds%.*}
+	days=$((seconds / 86400)) hours=$((seconds % 86400 / 3600)) minutes=$((seconds % 3600 / 60))
+	[ "$days" -gt 0 ] && uptime="${days}d "
+	[ "$days" -gt 0 ] || [ "$hours" -gt 0 ] && uptime="$uptime${hours}h "
+	uptime=" · up $uptime${minutes}m"
+fi
+# Without the data disk, df would report the root tmpfs instead.
+if mountpoint -q /var/lib/docker 2>/dev/null; then
+	disk=$(df -Ph /var/lib/docker | awk 'END { print $3 "/" $2 " used" }')
+	disk=" · /var/lib/docker $disk"
+else
+	disk=" · data disk not mounted"
+fi
+
+# Speech bubble borders, as wide as the quip plus its padding.
+border=$(printf "%$((${#quip} + 2))s" '')
+echo
+echo " $(echo "$border" | tr ' ' _)"
+echo "< $quip >"
+echo " $(echo "$border" | tr ' ' -)"
+printf "$blue"
+whale
+printf "$reset\n"
+printf 'Linux %s%s%s\n\n' "$(uname -r)" "$uptime" "$disk"

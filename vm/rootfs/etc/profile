@@ -1,3 +1,5 @@
 # Login shell setup for `dockma shell`.
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export PS1='dockma:\w# '
+# Interactive login shells only; `dockma shell -- cmd` never reads this file.
+case $- in *i*) [ -t 1 ] && /usr/libexec/dockma-motd ;; esac

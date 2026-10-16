@@ -41,7 +41,7 @@ The core library lives in `Sources/DockmaCore/`, grouped by area. Rows from Daem
 | Settings and paths | `Settings/Config.swift`, `Settings/Paths.swift` (also `DockmaError`) |
 | Support | `Support/Subprocess.swift` (runs launchctl and docker), `Support/LineIO.swift`, `Support/Log.swift`, `Support/DockerContext.swift` |
 | Guest build | `vm/Dockerfile`, `vm/kernel/dockma.config`, `vm/kernel/check-docker-config.sh` |
-| Guest boot | `vm/rootfs/init` (stage 0), `etc/inittab`, `etc/init.d/{rcS,dockerd,shutdown}`, `usr/libexec/dockma-disk` (data disk: format only when blank; tested by `vm/tests/dockma-disk-test.sh` in the guest build), `etc/docker/daemon.json`, `etc/profile` (shell prompt), `usr/share/udhcpc/default.script` |
+| Guest boot | `vm/rootfs/init` (stage 0), `etc/inittab`, `etc/init.d/{rcS,dockerd,shutdown}`, `usr/libexec/dockma-disk` (data disk: format only when blank; tested by `vm/tests/dockma-disk-test.sh` in the guest build), `etc/docker/daemon.json`, `etc/profile` (shell prompt; runs `usr/libexec/dockma-motd`, the whalesay-style greeting on interactive logins, tested by `vm/tests/dockma-motd-test.sh`), `usr/share/udhcpc/default.script` |
 | Guest agent | `vm/agent/main.go` (servers, control, port watcher), `ports.go` (pure port extraction), `shell.go` (shell sessions on a pty via creack/pty or on pipes) |
 
 ## Commands
