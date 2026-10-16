@@ -19,9 +19,17 @@ public enum Shell {
         process.standardError = err
         process.standardInput = FileHandle.nullDevice
         try process.run()
-        // Drain both pipes before waiting so a chatty child can't block.
+        // Drain both pipes at once: reading them one after the other blocks
+        // a child that fills the stderr pipe while stdout is being read.
+        nonisolated(unsafe) var stderrData = Data()
+        let stderrDone = DispatchGroup()
+        stderrDone.enter()
+        DispatchQueue.global().async {
+            stderrData = err.fileHandleForReading.readDataToEndOfFile()
+            stderrDone.leave()
+        }
         let stdoutData = out.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = err.fileHandleForReading.readDataToEndOfFile()
+        stderrDone.wait()
         process.waitUntilExit()
         return ShellResult(
             status: process.terminationStatus,
