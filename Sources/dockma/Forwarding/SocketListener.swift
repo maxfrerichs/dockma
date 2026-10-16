@@ -14,10 +14,24 @@ public final class SocketListener: @unchecked Sendable {
         self.description = description
         self.unixPath = unixPath
         source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .global())
-        source.setEventHandler { [fd] in
+        let spare = SpareDescriptor()
+        source.setEventHandler { [fd, spare, description] in
             while true {
                 let client = accept(fd, nil, nil)
-                if client < 0 { return }  // EAGAIN: drained
+                if client < 0 {
+                    switch errno {
+                    case EINTR, ECONNABORTED:
+                        continue
+                    case EAGAIN:
+                        break  // drained
+                    case EMFILE, ENFILE:
+                        spare.shed(listener: fd, description: description)
+                    default:
+                        Log.info("accept on \(description): \(String(cString: strerror(errno)))")
+                    }
+                    return
+                }
+                spare.accepted()
                 // macOS accepted sockets inherit O_NONBLOCK; the copiers block.
                 _ = fcntl(client, F_SETFL, fcntl(client, F_GETFL) & ~O_NONBLOCK)
                 var on: Int32 = 1
@@ -25,7 +39,10 @@ public final class SocketListener: @unchecked Sendable {
                 handler(client)
             }
         }
-        source.setCancelHandler { [fd] in close(fd) }
+        source.setCancelHandler { [fd, spare] in
+            close(fd)
+            spare.close()
+        }
         source.resume()
     }
 
@@ -119,6 +136,42 @@ public final class SocketListener: @unchecked Sendable {
         }
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
         return SocketListener(fd: fd, description: description, unixPath: unixPath, handler: handler)
+    }
+}
+
+/// A reserved descriptor for an accept loop that runs out of descriptors.
+/// Without it a pending connection stays queued on EMFILE, the read source
+/// fires again at once, and the daemon spins. Closing the spare frees a slot
+/// to accept the connection and drop it. Only one source's handlers use it,
+/// and dispatch never runs those concurrently.
+private final class SpareDescriptor: @unchecked Sendable {
+    private var fd = open("/dev/null", O_RDONLY | O_CLOEXEC)
+    private var shedding = false
+
+    func shed(listener: Int32, description: String) {
+        if !shedding {
+            shedding = true
+            Log.info("out of file descriptors; dropping new connections on \(description)")
+        }
+        if fd >= 0 {
+            Darwin.close(fd)
+        }
+        let client = accept(listener, nil, nil)
+        if client >= 0 {
+            Darwin.close(client)
+        }
+        fd = open("/dev/null", O_RDONLY | O_CLOEXEC)
+    }
+
+    func accepted() {
+        shedding = false
+    }
+
+    func close() {
+        if fd >= 0 {
+            Darwin.close(fd)
+            fd = -1
+        }
     }
 }
 

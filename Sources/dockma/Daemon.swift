@@ -38,6 +38,7 @@ public final class Daemon {
             exit(0)
         }
         Self.redirectOutput(to: paths.daemonLog)
+        Log.info("file descriptor limit: \(Self.raiseFileLimit())")
 
         signal(SIGPIPE, SIG_IGN)
         for sig in [SIGTERM, SIGINT] {
@@ -262,6 +263,27 @@ public final class Daemon {
         dup2(handle.fileDescriptor, STDOUT_FILENO)
         dup2(handle.fileDescriptor, STDERR_FILENO)
         try? handle.close()
+    }
+
+    /// launchd starts jobs with a soft limit of 256 descriptors, and every
+    /// proxied connection takes two. Raises the soft limit as far as the
+    /// system allows and returns the limit in effect.
+    @discardableResult
+    nonisolated static func raiseFileLimit() -> UInt64 {
+        var limit = rlimit()
+        guard getrlimit(RLIMIT_NOFILE, &limit) == 0 else { return 0 }
+        var perProcess: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        let systemMax = sysctlbyname("kern.maxfilesperproc", &perProcess, &size, nil, 0) == 0
+            ? rlim_t(perProcess) : rlim_t(OPEN_MAX)
+        // Darwin may refuse values above OPEN_MAX; fall back to that.
+        for target in [min(limit.rlim_max, systemMax), min(limit.rlim_max, rlim_t(OPEN_MAX))] where target > limit.rlim_cur {
+            var wanted = limit
+            wanted.rlim_cur = target
+            if setrlimit(RLIMIT_NOFILE, &wanted) == 0 { break }
+        }
+        _ = getrlimit(RLIMIT_NOFILE, &limit)
+        return UInt64(limit.rlim_cur)
     }
 
     /// A random locally administered unicast MAC address.

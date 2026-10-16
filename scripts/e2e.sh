@@ -97,6 +97,36 @@ step "shell works while dockerd is unresponsive"
 "$DOCKMA" shell -- sh -c 'kill -CONT $(pidof dockerd)'
 docker info >/dev/null 2>&1 || fail "dockerd did not resume"
 
+step "300 concurrent docker.sock connections (launchd's default limit is 256 fds)"
+python3 - "$DOCKMA_DIR/docker.sock" <<'PY' || fail "daemon did not cope with 300 open connections"
+import socket, subprocess, sys, time
+conns = []
+for _ in range(300):
+    # A sub-millisecond burst can overrun the listen backlog (somaxconn,
+    # 128) before the accept loop runs; that's not what this step tests.
+    for attempt in range(50):
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            s.connect(sys.argv[1])
+            break
+        except ConnectionRefusedError:
+            s.close()
+            time.sleep(0.01)
+    else:
+        sys.exit("connect kept being refused")
+    s.sendall(b"GET /_ping HTTP/1.1\r\nHost: docker\r\n")  # incomplete: held open
+    conns.append(s)
+if subprocess.run(["docker", "info", "--format", "{{.Name}}"], capture_output=True, timeout=30).returncode != 0:
+    sys.exit("docker info failed while 300 connections were open")
+# Every held connection must have been accepted and proxied, not shed.
+for s in conns:
+    s.settimeout(10)
+    s.sendall(b"Connection: close\r\n\r\n")
+    if not s.recv(64).startswith(b"HTTP/1.1 200"):
+        sys.exit("a held connection did not answer /_ping")
+    s.close()
+PY
+
 step "restart keeps data; registry pulls work afterwards"
 docker volume create dockma-e2e >/dev/null
 docker run --rm -v dockma-e2e:/data alpine sh -c 'echo persisted > /data/f'
