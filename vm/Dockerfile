@@ -34,11 +34,15 @@ RUN make ARCH=arm64 tinyconfig \
  && scripts/kconfig/merge_config.sh -m .config /build/dockma.config \
  && make ARCH=arm64 olddefconfig
 # Every fragment option must survive olddefconfig; a dropped one means an
-# unmet dependency that would otherwise fail silently at runtime.
+# unmet dependency that would otherwise fail silently at runtime. Every
+# disabled one must stay disabled; another option's select can re-enable it.
 RUN missing=0; \
     while IFS= read -r line; do \
-      case "$line" in CONFIG_*=*) ;; *) continue ;; esac; \
-      grep -qx "$line" .config || { echo "fragment option not applied: $line"; missing=1; }; \
+      case "$line" in \
+      CONFIG_*=*) grep -qx "$line" .config || { echo "fragment option not applied: $line"; missing=1; } ;; \
+      "# CONFIG_"*" is not set") opt=${line#"# "}; opt=${opt%% *}; \
+        if grep -q "^$opt=" .config; then echo "fragment option not disabled: $opt"; missing=1; fi ;; \
+      esac; \
     done < /build/dockma.config; \
     exit $missing
 COPY kernel/check-docker-config.sh /build/
