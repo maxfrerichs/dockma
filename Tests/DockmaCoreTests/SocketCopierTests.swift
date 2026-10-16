@@ -27,11 +27,11 @@ private func readToEOF(_ fd: Int32) -> Data? {
     let closed = Mutex(false)
     SocketCopier.pipe(left[1], right[1]) { closed.set(true) }
 
-    writeAll(client, Data("request".utf8))
+    writeAll(Data("request".utf8), to: client)
     shutdown(client, SHUT_WR)
     #expect(readToEOF(server) == Data("request".utf8))
 
-    writeAll(server, Data("response".utf8))
+    writeAll(Data("response".utf8), to: server)
     shutdown(server, SHUT_WR)
     #expect(readToEOF(client) == Data("response".utf8))
 

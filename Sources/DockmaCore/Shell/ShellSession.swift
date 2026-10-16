@@ -49,21 +49,21 @@ public final class ShellSession: @unchecked Sendable {
 
         if tty {
             enterRawMode()
-            onSignal(SIGWINCH) { session in
+            handleSignal(SIGWINCH) { session in
                 let (rows, cols) = Self.terminalSize()
                 session.send(.resize(rows: rows, cols: cols))
             }
             // Raw mode turns ^C into a byte for the remote side; these only
             // arrive from outside (kill, closing the terminal window).
             for sig in [SIGTERM, SIGHUP] {
-                onSignal(sig) { session in
+                handleSignal(sig) { session in
                     session.restoreTerminal()
                     exit(128 + sig)
                 }
             }
         } else {
             for sig in [SIGINT, SIGTERM, SIGHUP] {
-                onSignal(sig) { session in session.send(.signal(sig)) }
+                handleSignal(sig) { session in session.send(.signal(sig)) }
             }
         }
 
@@ -127,9 +127,9 @@ public final class ShellSession: @unchecked Sendable {
                             if flow == .credit { credit += Int(bytes) }
                         }
                     case .stdout(let data):
-                        writeAll(STDOUT_FILENO, data)
+                        writeAll(data, to: STDOUT_FILENO)
                     case .stderr(let data):
-                        writeAll(STDERR_FILENO, data)
+                        writeAll(data, to: STDERR_FILENO)
                     case .exit(let code):
                         return code
                     case .error(let message):
@@ -165,10 +165,11 @@ public final class ShellSession: @unchecked Sendable {
     @discardableResult
     private func send(_ frame: ShellFrame) -> Bool {
         guard let data = try? frame.encode() else { return false }
-        return writeLock.withLock { writeAll(fd, data) }
+        return writeLock.withLock { writeAll(data, to: fd) }
     }
 
-    private func onSignal(_ sig: Int32, handler: @escaping @Sendable (ShellSession) -> Void) {
+    /// Ignores `sig`'s default action and runs `handler` when it arrives.
+    private func handleSignal(_ sig: Int32, with handler: @escaping @Sendable (ShellSession) -> Void) {
         signal(sig, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: sig, queue: .global())
         source.setEventHandler { [self] in handler(self) }

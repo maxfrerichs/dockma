@@ -16,7 +16,8 @@ func currentExecutable() -> String {
     return url.resolvingSymlinksInPath().path
 }
 
-func printErr(_ message: String) {
+/// Writes `message` and a newline to stderr.
+func printError(_ message: String) {
     FileHandle.standardError.write(Data((message + "\n").utf8))
 }
 
@@ -53,8 +54,8 @@ struct Start: ParsableCommand {
 
         let agent = LaunchAgent(paths: paths, executable: currentExecutable())
         var job = agent.state()
-        if job.loaded, job.pid != nil {
-            if DockerPing.ping(socketPath: paths.dockerSocket.path) {
+        if job.isLoaded, job.pid != nil {
+            if DockerPing.isResponding(socketPath: paths.dockerSocket.path) {
                 print("dockma is already running")
                 return
             }
@@ -64,12 +65,12 @@ struct Start: ParsableCommand {
                 job = agent.state()
             }
         }
-        if job.loaded && job.pid == nil {
+        if job.isLoaded && job.pid == nil {
             // Left over from a failed start or a crash; reload the plist.
             try agent.bootout()
             job = agent.state()
         }
-        if !job.loaded {
+        if !job.isLoaded {
             if (try? ControlClient.status(paths: paths)) != nil {
                 print("dockma is already running (started outside launchd with `dockma daemon`)")
                 return
@@ -81,21 +82,21 @@ struct Start: ParsableCommand {
         let deadline = Date().addingTimeInterval(TimeInterval(timeout))
         let jobGraceDeadline = Date().addingTimeInterval(3)
         while Date() < deadline {
-            if DockerPing.ping(socketPath: paths.dockerSocket.path) {
+            if DockerPing.isResponding(socketPath: paths.dockerSocket.path) {
                 print("dockma is running; Docker socket: \(paths.dockerSocket.path)")
                 if let note = DockerContext.ensure(paths: paths) { print(note) }
                 if let hint = DockerContext.hint(paths: paths) { print(hint) }
                 return
             }
             if Date() > jobGraceDeadline, agent.state().pid == nil {
-                printErr("the dockma daemon exited during startup:")
-                if let log = tail(paths.daemonLog, lines: 15) { printErr(log) }
+                printError("the dockma daemon exited during startup:")
+                if let log = tail(paths.daemonLog, lines: 15) { printError(log) }
                 throw ExitCode.failure
             }
             Thread.sleep(forTimeInterval: 0.5)
         }
-        printErr("Docker did not answer within \(timeout)s. Last console output:")
-        if let log = tail(paths.consoleLog, lines: 20) { printErr(log) }
+        printError("Docker did not answer within \(timeout)s. Last console output:")
+        if let log = tail(paths.consoleLog, lines: 20) { printError(log) }
         throw ExitCode.failure
     }
 }
@@ -106,7 +107,7 @@ struct Stop: ParsableCommand {
     func run() throws {
         let paths = Paths.default()
         let agent = LaunchAgent(paths: paths, executable: currentExecutable())
-        if agent.state().loaded {
+        if agent.state().isLoaded {
             print("stopping dockma...")
             try agent.bootout()
             print("dockma stopped")
@@ -156,7 +157,7 @@ struct Status: ParsableCommand {
             print(String(decoding: try encoder.encode(status), as: UTF8.self))
             return
         }
-        let dockerUp = DockerPing.ping(socketPath: paths.dockerSocket.path)
+        let dockerUp = DockerPing.isResponding(socketPath: paths.dockerSocket.path)
         let uptime = Duration.seconds(Int(Date().timeIntervalSince(status.startedAt)))
         print("state:    \(status.state.rawValue)")
         print("docker:   \(dockerUp ? "ready" : "not answering") (\(paths.dockerSocket.path))")
@@ -334,7 +335,7 @@ struct Delete: ParsableCommand {
     func run() throws {
         let paths = Paths.default()
         let agent = LaunchAgent(paths: paths, executable: currentExecutable())
-        if agent.state().loaded || (try? ControlClient.status(paths: paths)) != nil {
+        if agent.state().isLoaded || (try? ControlClient.status(paths: paths)) != nil {
             throw DockmaError("dockma is running; run `dockma stop` first")
         }
         if !force {

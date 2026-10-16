@@ -8,13 +8,13 @@ public enum KernelCmdline {
             "console=hvc0",
             "rdinit=/init",
             "loglevel=4",
-            "dockma.home=\(percentEncode(home))",
+            "dockma.home=\(percentEncoded(home))",
         ].joined(separator: " ")
     }
 
     /// Percent-encodes everything except `[A-Za-z0-9/._-]` so the value has no
     /// spaces or quotes; rcS decodes `%XX` with printf.
-    static func percentEncode(_ s: String) -> String {
+    static func percentEncoded(_ s: String) -> String {
         var out = ""
         for byte in s.utf8 {
             switch byte {

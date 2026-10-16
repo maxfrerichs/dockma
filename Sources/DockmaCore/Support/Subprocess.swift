@@ -1,15 +1,17 @@
 import Foundation
 
-public struct ShellResult: Sendable {
+/// The exit status and captured output of a finished subprocess.
+public struct SubprocessResult: Sendable {
     public let status: Int32
     public let stdout: String
     public let stderr: String
 }
 
-public enum Shell {
+/// Runs helper programs (launchctl, docker). Unrelated to `dockma shell`.
+public enum Subprocess {
     /// Runs `executable` with `arguments` and captures its output.
     @discardableResult
-    public static func run(_ executable: String, _ arguments: [String]) throws -> ShellResult {
+    public static func run(_ executable: String, arguments: [String]) throws -> SubprocessResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
@@ -31,7 +33,7 @@ public enum Shell {
         let stdoutData = out.fileHandleForReading.readDataToEndOfFile()
         stderrDone.wait()
         process.waitUntilExit()
-        return ShellResult(
+        return SubprocessResult(
             status: process.terminationStatus,
             stdout: String(decoding: stdoutData, as: UTF8.self),
             stderr: String(decoding: stderrData, as: UTF8.self))

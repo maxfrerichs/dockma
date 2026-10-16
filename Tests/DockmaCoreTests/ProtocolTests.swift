@@ -27,7 +27,7 @@ import Testing
     var fds: [Int32] = [0, 0]
     #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &fds) == 0)
     defer { close(fds[0]) }
-    writeAll(fds[1], Data("one\ntwo\npartial".utf8))
+    writeAll(Data("one\ntwo\npartial".utf8), to: fds[1])
     close(fds[1])
     let reader = LineReader(fd: fds[0])
     #expect(reader.readLine() == Data("one".utf8))

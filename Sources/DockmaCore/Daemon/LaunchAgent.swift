@@ -46,16 +46,18 @@ public struct LaunchAgent: Sendable {
     private var domain: String { "gui/\(getuid())" }
     private var service: String { "\(domain)/\(Self.label)" }
 
+    /// What launchd reports about the dockma job.
     public struct JobState: Equatable, Sendable {
-        public var loaded: Bool
+        /// Whether launchd knows the job, running or not.
+        public var isLoaded: Bool
         public var pid: Int32?
     }
 
     public func state() -> JobState {
-        guard let result = try? Shell.run("/bin/launchctl", ["print", service]), result.status == 0 else {
-            return JobState(loaded: false, pid: nil)
+        guard let result = try? Subprocess.run("/bin/launchctl", arguments: ["print", service]), result.status == 0 else {
+            return JobState(isLoaded: false, pid: nil)
         }
-        return JobState(loaded: true, pid: Self.parsePID(launchctlPrint: result.stdout))
+        return JobState(isLoaded: true, pid: Self.parsePID(launchctlPrint: result.stdout))
     }
 
     static func parsePID(launchctlPrint output: String) -> Int32? {
@@ -75,7 +77,7 @@ public struct LaunchAgent: Sendable {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try plist(autostart: autostart).write(to: url, options: .atomic)
         try? FileManager.default.removeItem(at: plistURL(autostart: !autostart))
-        let result = try Shell.run("/bin/launchctl", ["bootstrap", domain, url.path])
+        let result = try Subprocess.run("/bin/launchctl", arguments: ["bootstrap", domain, url.path])
         guard result.status == 0 else {
             throw DockmaError("launchctl bootstrap failed: \(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
@@ -84,13 +86,13 @@ public struct LaunchAgent: Sendable {
     /// Unloads the job and waits until launchd has removed it. launchd sends
     /// SIGTERM, and `launchctl bootout` returns before the daemon has exited.
     public func bootout(timeout: TimeInterval = 40) throws {
-        let result = try Shell.run("/bin/launchctl", ["bootout", service])
+        let result = try Subprocess.run("/bin/launchctl", arguments: ["bootout", service])
         // 3 (ESRCH) / 113: the job is already gone.
-        guard result.status == 0 || !state().loaded else {
+        guard result.status == 0 || !state().isLoaded else {
             throw DockmaError("launchctl bootout failed: \(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
         let deadline = Date().addingTimeInterval(timeout)
-        while state().loaded {
+        while state().isLoaded {
             guard Date() < deadline else {
                 throw DockmaError("the dockma daemon did not exit within \(Int(timeout))s")
             }

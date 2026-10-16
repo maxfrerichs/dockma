@@ -12,7 +12,8 @@ public enum VMConfigurationBuilder {
         public static let shell: UInt32 = 1027
     }
 
-    public struct Result {
+    /// A built configuration plus what the caller should tell the user.
+    public struct Output {
         public let configuration: VZVirtualMachineConfiguration
         /// Set when Rosetta was requested but could not be attached.
         public let rosettaWarning: String?
@@ -23,7 +24,7 @@ public enum VMConfigurationBuilder {
         paths: Paths,
         consoleLog: FileHandle,
         dockerLog: FileHandle
-    ) throws -> Result {
+    ) throws -> Output {
         for url in [paths.kernel, paths.initrd] where !FileManager.default.fileExists(atPath: url.path) {
             throw DockmaError("guest image missing: \(url.path) (run `make guest install-guest`)")
         }
@@ -84,7 +85,7 @@ public enum VMConfigurationBuilder {
         vm.directorySharingDevices = shares
 
         try vm.validate()
-        return Result(configuration: vm, rosettaWarning: rosettaWarning)
+        return Output(configuration: vm, rosettaWarning: rosettaWarning)
     }
 
     /// Creates the sparse data disk, or grows it when `diskGiB` increased.

@@ -31,7 +31,7 @@ public final class SocketListener: @unchecked Sendable {
                     }
                     return
                 }
-                spare.accepted()
+                spare.didAccept()
                 // macOS accepted sockets inherit O_NONBLOCK; the copiers block.
                 _ = fcntl(client, F_SETFL, fcntl(client, F_GETFL) & ~O_NONBLOCK)
                 var on: Int32 = 1
@@ -67,14 +67,14 @@ public final class SocketListener: @unchecked Sendable {
             raw[bytes.count] = 0
         }
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw posixError("socket") }
+        guard fd >= 0 else { throw DockmaError.posix("socket") }
         unlink(path)
         let rc = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                 bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
             }
         }
-        guard rc == 0 else { close(fd); throw posixError("bind \(path)") }
+        guard rc == 0 else { close(fd); throw DockmaError.posix("bind \(path)") }
         chmod(path, 0o600)
         return try finish(fd: fd, description: path, unixPath: path, handler: handler)
     }
@@ -88,7 +88,7 @@ public final class SocketListener: @unchecked Sendable {
         switch address {
         case .v4(let a):
             fd = socket(AF_INET, SOCK_STREAM, 0)
-            guard fd >= 0 else { throw posixError("socket") }
+            guard fd >= 0 else { throw DockmaError.posix("socket") }
             setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, socklen_t(MemoryLayout<Int32>.size))
             var addr = sockaddr_in()
             addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
@@ -104,7 +104,7 @@ public final class SocketListener: @unchecked Sendable {
             description = "\(cString(text)):\(port)"
         case .v6(let a):
             fd = socket(AF_INET6, SOCK_STREAM, 0)
-            guard fd >= 0 else { throw posixError("socket") }
+            guard fd >= 0 else { throw DockmaError.posix("socket") }
             setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, socklen_t(MemoryLayout<Int32>.size))
             setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &on, socklen_t(MemoryLayout<Int32>.size))
             var addr = sockaddr_in6()
@@ -121,7 +121,7 @@ public final class SocketListener: @unchecked Sendable {
             description = "[\(cString(text))]:\(port)"
         }
         guard rc == 0 else {
-            let error = posixError("bind \(description)")
+            let error = DockmaError.posix("bind \(description)")
             close(fd)
             throw error
         }
@@ -130,7 +130,7 @@ public final class SocketListener: @unchecked Sendable {
 
     private static func finish(fd: Int32, description: String, unixPath: String?, handler: @escaping @Sendable (Int32) -> Void) throws -> SocketListener {
         guard listen(fd, 128) == 0 else {
-            let error = posixError("listen \(description)")
+            let error = DockmaError.posix("listen \(description)")
             close(fd)
             throw error
         }
@@ -163,7 +163,8 @@ private final class SpareDescriptor: @unchecked Sendable {
         fd = open("/dev/null", O_RDONLY | O_CLOEXEC)
     }
 
-    func accepted() {
+    /// Records a successful accept, so the next shortage is logged again.
+    func didAccept() {
         shedding = false
     }
 
@@ -177,8 +178,4 @@ private final class SpareDescriptor: @unchecked Sendable {
 
 private func cString(_ buffer: [CChar]) -> String {
     String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
-}
-
-func posixError(_ what: String) -> DockmaError {
-    DockmaError("\(what): \(String(cString: strerror(errno)))")
 }

@@ -38,7 +38,7 @@ public enum ControlClient {
     static func roundTrip(paths: Paths, request: ControlRequest) throws -> Data {
         let fd = try UnixSocket.connect(path: paths.controlSocket.path, timeoutSeconds: 5)
         defer { close(fd) }
-        guard writeAll(fd, try jsonLine(request)) else { throw posixError("write control socket") }
+        guard writeAll(try jsonLine(request), to: fd) else { throw DockmaError.posix("write control socket") }
         guard let line = LineReader(fd: fd).readLine() else {
             throw DockmaError("daemon closed the control connection")
         }
@@ -66,7 +66,7 @@ public enum ControlServer {
                 Task { @MainActor in
                     if var reply = respond(request) {
                         reply.append(UInt8(ascii: "\n"))
-                        writeAll(client, reply)
+                        writeAll(reply, to: client)
                     }
                     close(client)
                 }
@@ -90,7 +90,7 @@ public enum UnixSocket {
             raw[bytes.count] = 0
         }
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw posixError("socket") }
+        guard fd >= 0 else { throw DockmaError.posix("socket") }
         var on: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
         if let timeoutSeconds {
@@ -104,7 +104,7 @@ public enum UnixSocket {
             }
         }
         guard rc == 0 else {
-            let error = posixError("connect \(path)")
+            let error = DockmaError.posix("connect \(path)")
             close(fd)
             throw error
         }
@@ -114,11 +114,12 @@ public enum UnixSocket {
 
 /// Minimal Docker API health check over a unix socket.
 public enum DockerPing {
-    public static func ping(socketPath: String) -> Bool {
+    /// Whether dockerd answers `GET /_ping` on the unix socket at `socketPath`.
+    public static func isResponding(socketPath: String) -> Bool {
         guard let fd = try? UnixSocket.connect(path: socketPath, timeoutSeconds: 3) else { return false }
         defer { close(fd) }
         let request = "GET /_ping HTTP/1.1\r\nHost: docker\r\nConnection: close\r\n\r\n"
-        guard writeAll(fd, Data(request.utf8)) else { return false }
+        guard writeAll(Data(request.utf8), to: fd) else { return false }
         var response = Data()
         var chunk = [UInt8](repeating: 0, count: 4096)
         while true {

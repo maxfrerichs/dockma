@@ -32,9 +32,12 @@ public final class PortForwarder {
         return [address, extra].compactMap { $0 }.compactMap(IPAddress.init)
     }
 
+    /// The listener changes that `plan(current:desired:)` computes.
     public struct Plan: Equatable {
-        public var open: [ForwardedPort]
-        public var close: [UInt16]
+        /// Ports to start listening on, sorted by port.
+        public var toOpen: [ForwardedPort]
+        /// Ports whose listeners to close, sorted.
+        public var toClose: [UInt16]
     }
 
     /// Computes the listener changes needed to go from `current` (port →
@@ -45,16 +48,16 @@ public final class PortForwarder {
         let open = wanted.filter { current[$0.key] != $0.value }
             .map { ForwardedPort(port: $0.key, target: $0.value) }
             .sorted { $0.port < $1.port }
-        return Plan(open: open, close: close)
+        return Plan(toOpen: open, toClose: close)
     }
 
     public func update(_ desired: [ForwardedPort]) {
         let plan = Self.plan(current: forwards.mapValues(\.target), desired: desired)
-        for port in plan.close {
+        for port in plan.toClose {
             forwards.removeValue(forKey: port)?.listeners.forEach { $0.cancel() }
             Log.info("unforwarded port \(port)")
         }
-        for forward in plan.open {
+        for forward in plan.toOpen {
             let listeners = bindAddresses.compactMap { address -> SocketListener? in
                 do {
                     return try SocketListener.tcp(address: address, port: forward.port) { [host, target = forward.target] client in
@@ -80,7 +83,7 @@ public final class PortForwarder {
     private static func tunnel(client: Int32, target: String, host: VMHost) async {
         do {
             let guest = try await host.connect(port: VMConfigurationBuilder.Port.tunnel)
-            guard writeAll(guest, Data("tcp \(target)\n".utf8)) else {
+            guard writeAll(Data("tcp \(target)\n".utf8), to: guest) else {
                 close(guest)
                 close(client)
                 return

@@ -7,12 +7,12 @@ public enum DockerContext {
     /// Creates the context if the docker CLI exists and the context doesn't.
     /// Returns a note for the user, or nil when nothing needed doing.
     public static func ensure(paths: Paths) -> String? {
-        guard let docker = Shell.which("docker") else { return nil }
-        if let inspect = try? Shell.run(docker, ["context", "inspect", name]), inspect.status == 0 {
+        guard let docker = Subprocess.which("docker") else { return nil }
+        if let inspect = try? Subprocess.run(docker, arguments: ["context", "inspect", name]), inspect.status == 0 {
             return nil
         }
         let host = "unix://\(paths.dockerSocket.path)"
-        guard let result = try? Shell.run(docker, ["context", "create", name, "--description", "dockma VM", "--docker", "host=\(host)"]),
+        guard let result = try? Subprocess.run(docker, arguments: ["context", "create", name, "--description", "dockma VM", "--docker", "host=\(host)"]),
               result.status == 0
         else {
             return "could not create docker context \(name)"
@@ -21,8 +21,8 @@ public enum DockerContext {
     }
 
     public static func remove() {
-        guard let docker = Shell.which("docker") else { return }
-        _ = try? Shell.run(docker, ["context", "rm", "--force", name])
+        guard let docker = Subprocess.which("docker") else { return }
+        _ = try? Subprocess.run(docker, arguments: ["context", "rm", "--force", name])
     }
 
     /// Describes how the docker CLI must be pointed at dockma, or nil if the

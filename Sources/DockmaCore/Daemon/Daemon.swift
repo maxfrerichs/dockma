@@ -198,13 +198,13 @@ public final class Daemon {
             try? await Task.sleep(for: grace)
             Log.info("guest did not power off in time, stopping VM")
             try? await host.forceStop()
-            self.cleanup()
+            self.cleanUp()
             exit(0)
         }
     }
 
     private func vmStopped(error: Error?) {
-        cleanup()
+        cleanUp()
         if let error {
             Log.info("VM stopped with error: \(error)")
             exit(1)
@@ -223,7 +223,8 @@ public final class Daemon {
         agent?.stop()
     }
 
-    private func cleanup() {
+    /// Closes forwarding and every listener.
+    private func cleanUp() {
         closeForwarding()
         listeners.forEach { $0.cancel() }
         listeners.removeAll()
@@ -249,11 +250,11 @@ public final class Daemon {
     /// can't boot another VM on the same data disk. Returns the descriptor.
     nonisolated static func acquireLock(at url: URL) throws -> Int32 {
         let fd = open(url.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
-        guard fd >= 0 else { throw posixError("open \(url.path)") }
+        guard fd >= 0 else { throw DockmaError.posix("open \(url.path)") }
         guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
             let error = errno == EWOULDBLOCK
                 ? DockmaError("another dockma daemon is running (\(url.path) is locked)")
-                : posixError("lock \(url.path)")
+                : DockmaError.posix("lock \(url.path)")
             close(fd)
             throw error
         }

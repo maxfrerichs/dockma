@@ -26,7 +26,7 @@ public final class LineReader {
 
 /// Writes all of `data` to `fd`; returns false on error.
 @discardableResult
-public func writeAll(_ fd: Int32, _ data: Data) -> Bool {
+public func writeAll(_ data: Data, to fd: Int32) -> Bool {
     data.withUnsafeBytes { raw in
         var offset = 0
         while offset < raw.count {

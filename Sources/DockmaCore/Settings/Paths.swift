@@ -70,4 +70,9 @@ public struct DockmaError: Error, CustomStringConvertible, LocalizedError {
     public let description: String
     public init(_ description: String) { self.description = description }
     public var errorDescription: String? { description }
+
+    /// An error for the failed call `what`, with the message for the current `errno`.
+    static func posix(_ what: String) -> DockmaError {
+        DockmaError("\(what): \(String(cString: strerror(errno)))")
+    }
 }

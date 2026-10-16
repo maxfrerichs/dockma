@@ -33,7 +33,7 @@ public final class AgentClient {
     @discardableResult
     public func send(_ message: AgentMessage) -> Bool {
         guard fd >= 0, let data = try? jsonLine(message) else { return false }
-        return writeAll(fd, data)
+        return writeAll(data, to: fd)
     }
 
     private func connectLoop() async {

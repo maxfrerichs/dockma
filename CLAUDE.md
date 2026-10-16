@@ -39,7 +39,7 @@ The core library lives in `Sources/DockmaCore/`, grouped by area. Rows from Daem
 | Agent link | `Agent/AgentClient.swift` (reconnecting control client), `Agent/AgentProtocol.swift` |
 | launchd and CLI↔daemon | `Daemon/LaunchAgent.swift`, `Daemon/ControlProtocol.swift` (also `UnixSocket`, `DockerPing`) |
 | Settings and paths | `Settings/Config.swift`, `Settings/Paths.swift` (also `DockmaError`) |
-| Support | `Support/Shell.swift` (subprocess runner, unrelated to `dockma shell`), `Support/LineIO.swift`, `Support/Log.swift`, `Support/DockerContext.swift` |
+| Support | `Support/Subprocess.swift` (runs launchctl and docker), `Support/LineIO.swift`, `Support/Log.swift`, `Support/DockerContext.swift` |
 | Guest build | `vm/Dockerfile`, `vm/kernel/dockma.config`, `vm/kernel/check-docker-config.sh` |
 | Guest boot | `vm/rootfs/init` (stage 0), `etc/inittab`, `etc/init.d/{rcS,dockerd,shutdown}`, `usr/libexec/dockma-disk` (data disk: format only when blank; tested by `vm/tests/dockma-disk-test.sh` in the guest build), `etc/docker/daemon.json`, `etc/profile` (shell prompt), `usr/share/udhcpc/default.script` |
 | Guest agent | `vm/agent/main.go` (servers, control, port watcher), `ports.go` (pure port extraction), `shell.go` (shell sessions on a pty via creack/pty or on pipes) |
@@ -94,3 +94,39 @@ No linter or formatter is configured.
 - Pure helpers on `@MainActor` types that tests call are marked `nonisolated`.
 - Tests use **Swift Testing** (`import Testing`, `@Test`, `#expect`) with `@testable import DockmaCore`.
 - Pinned guest versions are `ARG`s in `vm/Dockerfile`: kernel, Docker static bundle and moby's `check-config.sh` (each with sha256), Alpine, Go. Bumping `MOBY_VERSION` needs a new `CHECK_CONFIG_SHA256`.
+
+## Swift naming
+
+Swift code follows the [API Design Guidelines](https://www.swift.org/documentation/api-design-guidelines/). The Go agent follows Go conventions instead. These guideline rules are the ones that come up here:
+
+- **Case and acronyms.** Types and protocols are UpperCamelCase; everything else is lowerCamelCase. Acronyms take one case throughout: `macAddress`, `randomMACAddress()`, `lockFD`, `parsePID`, `stdinEOF`.
+- **Booleans read as assertions**: `isRunning`, `isConnected`, `hasVirtualization()`. Not `loaded` or `agentConnected`.
+- **Grammar follows side effects.**
+  - Without side effects, a name is a noun phrase: `terminalSize()`, `bindAddresses(for:)`.
+  - With side effects, it is an imperative verb phrase: `createDirectories()`, `requestStop()`, `cleanUp()`.
+  - Properties and types are nouns, never verbs.
+- **Factory methods start with `make`.**
+- **Argument labels.**
+  - Omit a label only when the arguments can't be told apart (`SocketCopier.pipe(a, b)`) or the call is a value-preserving conversion (`IPAddress("::1")`).
+  - A first argument that forms a prepositional phrase gets a label starting at the preposition: `load(from:)`, `save(to:)`, `takeCredit(upTo:)`.
+  - Label every other argument, defaulted ones included.
+- **Abbreviations.** Only searchable terms of art: `fd`, `argv`, `tty`, `pid`, `initrd`. Don't reuse a standard-library name for something else (e.g. a nested `Result`).
+- **Prefer methods and static members to free functions**, unless there is no obvious `self`.
+- **Doc comments.** Every new or changed declaration gets a `///` summary: a single sentence fragment saying what it does, returns, creates or is. A computed property that isn't O(1) says so. Existing undocumented code gets a summary when it is next touched; there is no backfill.
+
+Project rules, which the guidelines don't cover:
+
+- **Names that leave the process are frozen.** Renaming one of these silently changes a format that other binaries or users depend on:
+  - **Codable property names** are JSON keys.
+    - `ShellStart` and `AgentMessage` are mirrored by Go JSON tags in `vm/agent`.
+    - `ControlRequest` and `DaemonStatus` are exchanged with a daemon that may be an older binary.
+    - `Config` is stored in `~/.dockma/config.json`.
+  - **String raw values of Codable enums** are wire strings (`ControlRequest.Command`, `DaemonStatus.State`). So are the `AgentMessage.type` values.
+  - **ArgumentParser property names** become flag names (`ConfigCommand.portBindAddress` is `--port-bind-address`). `name:` isn't pinned anywhere.
+
+  To rename one of these, keep the old external name explicitly with `CodingKeys`, a raw value or `@Option(name:)`, and add a test that decodes the old form. The rest of DockmaCore is `public` only for `DockmaCLI` and the tests, so other renames are free.
+- **Units.** Put the unit in the name when the type doesn't carry it: `memoryMiB`, `diskGiB`, `timeoutSeconds`. Prefer `Duration` for new time values.
+- **Static factories in enum-case style are fine**, e.g. `SocketListener.unix(path:handler:)` and `AgentMessage.shutdown`.
+- **Modules.** The modules are `DockmaCore` and `DockmaCLI`; the product is `dockma`. No module may be named `Dockma`, because the CLI's `@main struct Dockma` would shadow it.
+- **CLI command types** are named after the command. They get a `Command` suffix only when the name clashes with a DockmaCore type: `ShellCommand`, `ConfigCommand`, `DaemonCommand`.
+- **Source folders** under `Sources/DockmaCore/` are UpperCamelCase feature areas. A new file goes in its area's folder, and the source map above is updated with it.

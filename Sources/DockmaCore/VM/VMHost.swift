@@ -36,7 +36,7 @@ public final class VMHost: NSObject, VZVirtualMachineDelegate {
         let connection = try await device.connect(toPort: port)
         let fd = dup(connection.fileDescriptor)
         connection.close()
-        guard fd >= 0 else { throw posixError("dup") }
+        guard fd >= 0 else { throw DockmaError.posix("dup") }
         var on: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
         return fd

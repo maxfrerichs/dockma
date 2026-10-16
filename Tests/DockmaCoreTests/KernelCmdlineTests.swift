@@ -9,8 +9,8 @@ import Testing
 }
 
 @Test func cmdlinePercentEncodesUnsafeCharacters() {
-    #expect(KernelCmdline.percentEncode("/Users/Jane Doe") == "/Users/Jane%20Doe")
-    #expect(KernelCmdline.percentEncode("/Users/jürgen") == "/Users/j%C3%BCrgen")
-    #expect(KernelCmdline.percentEncode("/Users/a.b_c-d") == "/Users/a.b_c-d")
+    #expect(KernelCmdline.percentEncoded("/Users/Jane Doe") == "/Users/Jane%20Doe")
+    #expect(KernelCmdline.percentEncoded("/Users/jürgen") == "/Users/j%C3%BCrgen")
+    #expect(KernelCmdline.percentEncoded("/Users/a.b_c-d") == "/Users/a.b_c-d")
     #expect(!KernelCmdline.build(home: "/Users/x y\"z").contains(" y"))
 }
