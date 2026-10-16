@@ -3,4 +3,10 @@
 # host writes to ~/.dockma/logs/docker.log. The pipe keeps dockerd from
 # seeing a TTY, so its log has no color escape codes.
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+if [ -e /run/dockma-disk-failed ]; then
+	# Don't start on an empty /var/lib/docker; sleep so init doesn't respawn
+	# this script in a tight loop.
+	echo "dockerd not started: data disk failed: $(cat /run/dockma-disk-failed)" >/dev/hvc1
+	exec sleep 3600
+fi
 dockerd --config-file /etc/docker/daemon.json 2>&1 | cat >/dev/hvc1

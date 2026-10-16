@@ -75,13 +75,16 @@ RUN mkdir -p bin sbin usr/bin usr/sbin lib usr/lib etc/ssl/certs proc sys dev ru
  && copy_bin /usr/sbin/nft usr/sbin/nft \
  && copy_bin /sbin/mke2fs sbin/mke2fs \
  && copy_bin /usr/sbin/resize2fs usr/sbin/resize2fs \
+ && copy_bin /sbin/e2fsck sbin/e2fsck \
  && cp /etc/ssl/certs/ca-certificates.crt etc/ssl/certs/
 COPY --from=cpiotool /usr/local/bin/gen_init_cpio /usr/local/bin/
 COPY --from=docker /out/ usr/bin/
 COPY --from=agent /out/dockma-agent usr/bin/dockma-agent
 COPY rootfs/ ./
-RUN chmod 0755 init etc/init.d/* usr/share/udhcpc/default.script \
- && usr/sbin/nft --version && sbin/mke2fs -V \
+COPY tests/ /tests/
+RUN chmod 0755 init etc/init.d/* usr/libexec/dockma-disk usr/share/udhcpc/default.script \
+ && usr/sbin/nft --version && sbin/mke2fs -V && sbin/e2fsck -V \
+ && sh /tests/dockma-disk-test.sh /rootfs/usr/libexec/dockma-disk /rootfs/bin/busybox \
  && mkdir -p /out \
  && printf 'dir /dev 0755 0 0\nnod /dev/console 0600 0 0 c 5 1\nnod /dev/null 0666 0 0 c 1 3\n' > /tmp/devices \
  && { gen_init_cpio /tmp/devices; find . -mindepth 1 | sort | cpio -o -H newc --quiet; } \

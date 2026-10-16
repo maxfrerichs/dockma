@@ -38,7 +38,7 @@ The home directory is shared via virtiofs (tag `home`) and mounted in the guest 
 | launchd and CLI↔daemon | `LaunchAgent.swift`, `ControlProtocol.swift` (also `UnixSocket`, `DockerPing`) |
 | Settings and paths | `Config.swift`, `Paths.swift`, `KernelCmdline.swift`, `Entitlements.swift` |
 | Guest build | `vm/Dockerfile`, `vm/kernel/dockma.config`, `vm/kernel/check-docker-config.sh` |
-| Guest boot | `vm/rootfs/init` (stage 0), `etc/inittab`, `etc/init.d/{rcS,dockerd,shutdown}`, `etc/docker/daemon.json`, `etc/profile` (shell prompt), `usr/share/udhcpc/default.script` |
+| Guest boot | `vm/rootfs/init` (stage 0), `etc/inittab`, `etc/init.d/{rcS,dockerd,shutdown}`, `usr/libexec/dockma-disk` (data disk: format only when blank; tested by `vm/tests/dockma-disk-test.sh` in the guest build), `etc/docker/daemon.json`, `etc/profile` (shell prompt), `usr/share/udhcpc/default.script` |
 | Guest agent | `vm/agent/main.go` (servers, control, port watcher), `ports.go` (pure port extraction), `shell.go` (shell sessions on a pty via creack/pty or on pipes) |
 
 ## Commands

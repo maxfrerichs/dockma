@@ -29,15 +29,13 @@ ip link set lo up
 ip link set eth0 up
 udhcpc -i eth0 -s /usr/share/udhcpc/default.script -t 20 -T 1 -A 2 -b || log "dhcp failed"
 
-# Persistent data disk, formatted on first boot and grown when the host
-# enlarged the image file.
+# Persistent data disk: formatted only when blank, checked and mounted
+# otherwise. On failure dockma-disk leaves /run/dockma-disk-failed, which
+# keeps dockerd from starting on an empty RAM-backed /var/lib/docker.
+# Keep this before the home share is mounted: the disk tools run as root and
+# must never have the user's real home directory within reach.
 if [ -b /dev/vda ]; then
-	if ! blkid /dev/vda | grep -q 'TYPE="ext4"'; then
-		log "formatting data disk"
-		mke2fs -q -t ext4 -L dockma-data /dev/vda
-	fi
-	mount -t ext4 -o noatime /dev/vda /var/lib/docker
-	resize2fs /dev/vda >/dev/null 2>&1
+	/usr/libexec/dockma-disk /dev/vda /var/lib/docker
 else
 	log "no data disk, /var/lib/docker is in RAM"
 fi

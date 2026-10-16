@@ -1,0 +1,63 @@
+#!/bin/sh
+# Prepares the persistent data disk and mounts it. Only a blank disk is ever
+# formatted: a disk whose ext4 superblock is damaged still holds the user's
+# images and volumes, and `e2fsck -fy` can usually recover it from a backup
+# superblock. busybox blkid prints nothing for such a disk, so "blkid doesn't
+# say ext4" is not evidence of a new disk.
+# Usage: dockma-disk <device> <mountpoint>
+# With DOCKMA_DISK_DRYRUN=1 it prints the decision (format, check or refuse)
+# and changes nothing.
+dev=$1
+mnt=$2
+failed=/run/dockma-disk-failed
+log() { echo "dockma: $*"; }
+
+# Number of non-zero bytes in <count> 4 KiB blocks starting at block <skip>.
+nonzero() { dd if="$dev" bs=4096 skip="$1" count="$2" 2>/dev/null | tr -d '\0' | wc -c; }
+
+decide() {
+	if blkid "$dev" | grep -q 'TYPE="ext4"'; then
+		echo check
+	# The first MiB holds the primary superblock and group descriptors; block
+	# 32768 holds ext4's first backup superblock (4 KiB blocks).
+	elif [ $(($(nonzero 0 256) + $(nonzero 32768 1))) -eq 0 ]; then
+		echo format
+	else
+		echo refuse
+	fi
+}
+
+fail() {
+	log "$*"
+	log "the data disk is not mounted and dockerd will not start. Recover with:"
+	log "  dockma shell -- e2fsck -fy $dev && dockma restart"
+	echo "$*" >"$failed"
+	exit 1
+}
+
+action=$(decide)
+if [ -n "${DOCKMA_DISK_DRYRUN:-}" ]; then
+	echo "$action"
+	exit 0
+fi
+
+case "$action" in
+format)
+	log "formatting blank data disk"
+	mke2fs -q -t ext4 -L dockma-data "$dev" || fail "mke2fs $dev failed"
+	;;
+check)
+	# 0: clean, 1: errors fixed, 2: fixed, reboot advised (moot, not mounted).
+	e2fsck -p "$dev"
+	rc=$?
+	[ "$rc" -lt 4 ] || fail "e2fsck -p $dev found errors it cannot fix on its own (exit $rc)"
+	;;
+refuse)
+	fail "$dev holds data but no readable ext4 filesystem; not formatting it"
+	;;
+esac
+
+mount -t ext4 -o noatime "$dev" "$mnt" || fail "cannot mount $dev on $mnt"
+# Grow the filesystem when the host enlarged the image file.
+resize2fs "$dev" >/dev/null 2>&1
+exit 0

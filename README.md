@@ -189,7 +189,7 @@ dockma shell ► ~/.dockma/shell.sock  │                        │
 - **busybox init** then:
   - mounts the pseudo filesystems and cgroup v2;
   - gets an address over DHCP;
-  - formats `/dev/vda` on first boot (and grows it if the host enlarged the image), then mounts it at `/var/lib/docker`;
+  - prepares `/dev/vda` and mounts it at `/var/lib/docker`. A blank disk is formatted; an existing one is checked with `e2fsck -p` and grown if the host enlarged the image. A disk that holds data but no readable ext4 is never formatted: dockerd stays down and the console log names the recovery command;
   - mounts the home and Rosetta shares.
 - **dockerd** runs with `firewall-backend: nftables`, so the guest ships `nft` instead of iptables and the kernel needs no xtables.
 - **`dockma-agent`** (Go):
@@ -241,6 +241,7 @@ vm/Dockerfile             guest build (kernel, rootfs, initramfs)
 vm/kernel/                Kconfig fragment and Docker requirements gate
 vm/rootfs/                init scripts, inittab, dockerd config, DHCP hook
 vm/agent/                 dockma-agent (Go) with tests
+vm/tests/                 guest script tests, run during the guest build
 scripts/e2e.sh            end-to-end test
 ```
 
@@ -250,6 +251,7 @@ scripts/e2e.sh            end-to-end test
 - **`dockma start` times out or the daemon exits during startup.** `start` prints the relevant log tail. Check it in full with `dockma logs --daemon` and `dockma logs`.
 - **A guest image is missing.** Run `make guest install-guest`.
 - **`docker` talks to a different engine.** Check `echo $DOCKER_HOST` and `docker context show`.
+- **dockerd doesn't start and `dockma logs` says the data disk is not mounted.** The guest refuses to format a disk that holds data. `dockma shell` still works: run `dockma shell -- e2fsck -fy /dev/vda`, which can recover a damaged superblock from a backup copy, then `dockma restart`.
 - **A published port isn't forwarded.** Run `dockma logs --daemon`. If the host port is already in use, the daemon logs `cannot forward port …`.
 
 ## Limitations
