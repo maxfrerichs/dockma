@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:dockma}",
+            "name": "Debug dockma",
+            "target": "dockma",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug dockma"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:dockma}",
+            "name": "Release dockma",
+            "target": "dockma",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release dockma"
+        }
+    ]
+}
