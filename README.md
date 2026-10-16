@@ -139,6 +139,8 @@ Settings are stored in `~/.dockma/config.json`. The VM's MAC address is generate
 
 Everything lives under `~/.dockma`. You can override the location with `DOCKMA_HOME`, but socket paths must stay under 104 bytes.
 
+The directory and `logs/` are kept at mode 0700, and `data.img`, `config.json` and the VM logs at 0600: the data disk holds everything containers store, and other local accounts can often traverse a macOS home directory. dockma resets these modes on every start.
+
 | Path | Contents |
 |---|---|
 | `docker.sock` | Docker API socket for the macOS `docker` CLI |

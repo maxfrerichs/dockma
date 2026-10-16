@@ -212,7 +212,8 @@ public final class Daemon {
         listeners.removeAll()
     }
 
-    /// Keeps one previous log as `<name>.1` and opens a fresh file for writing.
+    /// Keeps one previous log as `<name>.1` and opens a fresh file (mode 0600)
+    /// for writing.
     nonisolated static func rotateAndOpen(_ url: URL) throws -> FileHandle {
         let fm = FileManager.default
         let previous = url.appendingPathExtension("1")
@@ -220,7 +221,7 @@ public final class Daemon {
             try? fm.removeItem(at: previous)
             try fm.moveItem(at: url, to: previous)
         }
-        guard fm.createFile(atPath: url.path, contents: nil) else {
+        guard fm.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
             throw DockmaError("cannot create \(url.path)")
         }
         return try FileHandle(forWritingTo: url)

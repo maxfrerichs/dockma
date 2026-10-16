@@ -89,14 +89,16 @@ public enum VMConfigurationBuilder {
 
     /// Creates the sparse data disk, or grows it when `diskGiB` increased.
     /// The guest grows the ext4 filesystem with resize2fs on boot.
-    public static func prepareDataDisk(at url: URL, sizeGiB: UInt64) throws {
+    /// The image is kept at mode 0600.
+    nonisolated public static func prepareDataDisk(at url: URL, sizeGiB: UInt64) throws {
         let size = sizeGiB * 1024 * 1024 * 1024
         let fm = FileManager.default
         if !fm.fileExists(atPath: url.path) {
-            guard fm.createFile(atPath: url.path, contents: nil) else {
+            guard fm.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
                 throw DockmaError("cannot create \(url.path)")
             }
         }
+        try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         let current = (try fm.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.uint64Value ?? 0
         if current > size {
             throw DockmaError("data disk is \(current >> 30) GiB; shrinking to \(sizeGiB) GiB is not supported")

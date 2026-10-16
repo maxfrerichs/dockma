@@ -32,9 +32,22 @@ public struct Paths: Sendable {
     public var kernel: URL { guest.appendingPathComponent("Image") }
     public var initrd: URL { guest.appendingPathComponent("initramfs.cpio.zst") }
 
+    /// Creates the state directories and keeps the root and logs private
+    /// (0700) on every call, which also fixes older installs. The data disk
+    /// and logs hold whatever containers store, and macOS home directories
+    /// are often traversable by the `staff` group.
     public func createDirectories() throws {
+        let fm = FileManager.default
         for dir in [root, logs, guest] {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        // Never change the mode of the home directory itself (DOCKMA_HOME=~).
+        for dir in [root, logs] where dir.standardizedFileURL.path != home.standardizedFileURL.path {
+            try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+        }
+        // An older install's config.json, which is only rewritten on change.
+        if fm.fileExists(atPath: config.path) {
+            try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: config.path)
         }
     }
 
