@@ -103,3 +103,5 @@ RUN chmod 0755 init etc/init.d/* usr/libexec/dockma-disk usr/libexec/dockma-motd
 FROM scratch
 COPY --from=kernel /out/ /
 COPY --from=rootfs /out/ /
+# The host refuses a guest whose protocol number differs from its own.
+COPY agent/protocol /guest-protocol

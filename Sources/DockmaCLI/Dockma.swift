@@ -48,9 +48,7 @@ struct Start: ParsableCommand {
         try paths.createDirectories()
         let config = try Config.load(from: paths.config)
         try config.validate()
-        for url in [paths.kernel, paths.initrd] where !FileManager.default.fileExists(atPath: url.path) {
-            throw DockmaError("guest image missing: \(url.path)\nBuild it with `make guest install-guest`.")
-        }
+        try GuestImage.validate(paths: paths)
 
         let agent = LaunchAgent(paths: paths, executable: currentExecutable())
         var job = agent.state()
@@ -79,30 +77,73 @@ struct Start: ParsableCommand {
         }
 
         print("starting dockma...")
-        // Docker is pinged often because the guest boots in about a second.
-        // The daemon check spawns launchctl, so it keeps a slower pace.
-        let deadline = Date().addingTimeInterval(TimeInterval(timeout))
-        var nextJobCheck = Date().addingTimeInterval(3)
-        while Date() < deadline {
-            if DockerPing.isResponding(socketPath: paths.dockerSocket.path) {
-                print("dockma is running; Docker socket: \(paths.dockerSocket.path)")
-                if let note = DockerContext.ensure(paths: paths) { print(note) }
-                if let hint = DockerContext.hint(paths: paths) { print(hint) }
-                return
-            }
-            if Date() > nextJobCheck {
-                if agent.state().pid == nil {
-                    printError("the dockma daemon exited during startup:")
-                    if let log = tail(paths.daemonLog, lines: 15) { printError(log) }
-                    throw ExitCode.failure
+        let deadline = ContinuousClock.now + .seconds(timeout)
+        do {
+            let fd = try connectToDaemon(agent: agent, paths: paths, deadline: deadline)
+            switch try ControlClient.waitUntilReady(fd: fd, timeout: deadline - .now) {
+            case .ready:
+                // The daemon serves the docker socket before Docker can be
+                // ready; this checks the whole path once.
+                guard DockerPing.isResponding(socketPath: paths.dockerSocket.path) else {
+                    throw DockmaError("the daemon reported Docker ready, but \(paths.dockerSocket.path) doesn't answer")
                 }
-                nextJobCheck = Date().addingTimeInterval(0.5)
+            case .closed:
+                if (try? ControlClient.status(paths: paths)) != nil {
+                    throw DockmaError("the running dockma daemon predates this CLI; run `dockma restart`")
+                }
+                throw StartFailure.daemonExited
+            case .timedOut:
+                throw StartFailure.timedOut
             }
-            Thread.sleep(forTimeInterval: 0.05)
+        } catch StartFailure.daemonExited {
+            printError("the dockma daemon exited during startup:")
+            if let log = tail(paths.daemonLog, lines: 15) { printError(log) }
+            throw ExitCode.failure
+        } catch StartFailure.timedOut {
+            printError("Docker did not answer within \(timeout)s. Last console output:")
+            if let log = tail(paths.consoleLog, lines: 20) { printError(log) }
+            throw ExitCode.failure
         }
-        printError("Docker did not answer within \(timeout)s. Last console output:")
-        if let log = tail(paths.consoleLog, lines: 20) { printError(log) }
-        throw ExitCode.failure
+        print("dockma is running; Docker socket: \(paths.dockerSocket.path)")
+        if let note = DockerContext.ensure(paths: paths) { print(note) }
+        if let hint = DockerContext.hint(paths: paths) { print(hint) }
+    }
+
+    /// Why `start` gave up waiting.
+    private enum StartFailure: Error {
+        case daemonExited
+        case timedOut
+    }
+
+    /// Connects to the daemon's control socket as soon as it listens. Wakes
+    /// on changes to the state directory, where the socket appears, and on
+    /// the daemon's exit. Until the daemon's pid is known, every wake also
+    /// asks launchd, which tells a daemon that already exited from one not
+    /// yet started.
+    private func connectToDaemon(agent: LaunchAgent, paths: Paths, deadline: ContinuousClock.Instant) throws -> Int32 {
+        let events = try KernelEvents()
+        try events.watchWrites(toDirectory: paths.root)
+        var isWatchingExit = false
+        func checkJob() throws {
+            let job = agent.state()
+            if job.hasExited { throw StartFailure.daemonExited }
+            guard let pid = job.pid else { return }
+            guard events.watchExit(ofProcess: pid) else { throw StartFailure.daemonExited }
+            isWatchingExit = true
+        }
+        try checkJob()
+        while true {
+            if let fd = try? UnixSocket.connect(path: paths.controlSocket.path, timeoutSeconds: 5) {
+                return fd
+            }
+            let remaining = deadline - .now
+            guard remaining > .zero else { throw StartFailure.timedOut }
+            // The timeout only bounds a wait for a daemon whose pid wasn't
+            // known yet; with the exit watched, events alone suffice.
+            let event = events.wait(timeout: isWatchingExit ? remaining : min(remaining, .seconds(1)))
+            if event == .processExited { throw StartFailure.daemonExited }
+            if !isWatchingExit { try checkJob() }
+        }
     }
 }
 

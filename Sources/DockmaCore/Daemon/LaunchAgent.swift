@@ -51,20 +51,36 @@ public struct LaunchAgent: Sendable {
         /// Whether launchd knows the job, running or not.
         public var isLoaded: Bool
         public var pid: Int32?
+        /// How often launchd has started the job since it was loaded.
+        public var runCount = 0
+
+        /// Whether the job ran and has no process now: it exited, and
+        /// launchd may or may not start it again.
+        public var hasExited: Bool { !isLoaded || (pid == nil && runCount > 0) }
     }
 
+    /// What launchd reports about the job now. Spawns `launchctl`.
     public func state() -> JobState {
         guard let result = try? Subprocess.run("/bin/launchctl", arguments: ["print", service]), result.status == 0 else {
             return JobState(isLoaded: false, pid: nil)
         }
-        return JobState(isLoaded: true, pid: Self.parsePID(launchctlPrint: result.stdout))
+        return JobState(
+            isLoaded: true,
+            pid: Self.field("pid", launchctlPrint: result.stdout).flatMap { Int32($0) },
+            runCount: Self.field("runs", launchctlPrint: result.stdout).flatMap { Int($0) } ?? 0)
     }
 
+    /// The pid in `launchctl print` output, if the job has a process.
     static func parsePID(launchctlPrint output: String) -> Int32? {
+        field("pid", launchctlPrint: output).flatMap { Int32($0) }
+    }
+
+    /// The value of the first top-level `name = value` line.
+    static func field(_ name: String, launchctlPrint output: String) -> String? {
         for line in output.split(separator: "\n") {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("pid = ") {
-                return Int32(trimmed.dropFirst("pid = ".count))
+            if trimmed.hasPrefix("\(name) = ") {
+                return String(trimmed.dropFirst("\(name) = ".count))
             }
         }
         return nil
@@ -85,18 +101,29 @@ public struct LaunchAgent: Sendable {
 
     /// Unloads the job and waits until launchd has removed it. launchd sends
     /// SIGTERM, and `launchctl bootout` returns before the daemon has exited.
-    public func bootout(timeout: TimeInterval = 40) throws {
+    public func bootout(timeout: Duration = .seconds(40)) throws {
+        let deadline = ContinuousClock.now + timeout
+        let pid = state().pid
+        // Watch before booting out, so the exit can't be missed.
+        let events = try KernelEvents()
+        let isWatchingExit = pid.map { events.watchExit(ofProcess: $0) } ?? false
         let result = try Subprocess.run("/bin/launchctl", arguments: ["bootout", service])
         // 3 (ESRCH) / 113: the job is already gone.
         guard result.status == 0 || !state().isLoaded else {
             throw DockmaError("launchctl bootout failed: \(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
-        let deadline = Date().addingTimeInterval(timeout)
+        if isWatchingExit, events.wait(timeout: deadline - .now) == nil {
+            throw DockmaError("the dockma daemon did not exit within \(timeout)")
+        }
+        // launchd removes the job shortly after the process exits and sends
+        // no event for it, so this checks again until it is gone. With the
+        // process gone (exited, or none to begin with) that takes at most a
+        // few rounds.
         while state().isLoaded {
-            guard Date() < deadline else {
-                throw DockmaError("the dockma daemon did not exit within \(Int(timeout))s")
+            guard ContinuousClock.now < deadline else {
+                throw DockmaError("the dockma daemon did not exit within \(timeout)")
             }
-            Thread.sleep(forTimeInterval: 0.2)
+            Thread.sleep(forTimeInterval: 0.02)
         }
     }
 

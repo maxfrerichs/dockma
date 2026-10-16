@@ -2,7 +2,9 @@ import Foundation
 
 /// CLI → daemon request on ~/.dockma/control.sock (one JSON line each way).
 public struct ControlRequest: Codable, Sendable {
-    public enum Command: String, Codable, Sendable { case status, stop }
+    /// `wait` is answered with a `DaemonStatus` once Docker is ready, and
+    /// closed without a reply if the daemon stops first.
+    public enum Command: String, Codable, Sendable { case status, stop, wait }
     public var command: Command
     public init(command: Command) { self.command = command }
 }
@@ -35,6 +37,38 @@ public enum ControlClient {
         _ = try roundTrip(paths: paths, request: ControlRequest(command: .stop))
     }
 
+    /// How a `wait` request ended.
+    public enum WaitOutcome: Sendable {
+        /// Docker is ready.
+        case ready(DaemonStatus)
+        /// The daemon closed the connection without replying: it exited or
+        /// is stopping, or it is too old to know `wait`.
+        case closed
+        /// Nothing arrived within the timeout.
+        case timedOut
+    }
+
+    /// Asks the daemon on an already connected `fd` to reply once Docker is
+    /// ready, and blocks until it does, closes, or `timeout` passes. Takes
+    /// ownership of `fd`.
+    public static func waitUntilReady(fd: Int32, timeout: Duration) throws -> WaitOutcome {
+        defer { close(fd) }
+        guard writeAll(try jsonLine(ControlRequest(command: .wait)), to: fd) else {
+            // The daemon went away between connect and write.
+            return .closed
+        }
+        let milliseconds = timeout.components.seconds * 1000 + timeout.components.attoseconds / 1_000_000_000_000_000
+        var pending = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        var ready: Int32
+        repeat {
+            ready = poll(&pending, 1, Int32(clamping: max(0, milliseconds)))
+        } while ready < 0 && errno == EINTR
+        guard ready > 0 else { return .timedOut }
+        // Readable means a reply or EOF, and the reply is a single short line.
+        guard let line = LineReader(fd: fd).readLine() else { return .closed }
+        return .ready(try JSONDecoder().decode(DaemonStatus.self, from: line))
+    }
+
     static func roundTrip(paths: Paths, request: ControlRequest) throws -> Data {
         let fd = try UnixSocket.connect(path: paths.controlSocket.path, timeoutSeconds: 5)
         defer { close(fd) }
@@ -46,10 +80,40 @@ public enum ControlClient {
     }
 }
 
-/// Serves the control socket; `respond` runs on the main actor.
+/// The pending reply to one control request. It owns the client descriptor
+/// until `send(_:)` or `close()`; a request that is never answered stays
+/// open, so the owner must eventually call one of them.
+@MainActor
+public final class ControlReply {
+    private var fd: Int32
+
+    /// Takes ownership of the client descriptor `fd`.
+    init(fd: Int32) {
+        self.fd = fd
+    }
+
+    /// Writes `data` as one line and closes the connection.
+    public func send(_ data: Data) {
+        guard fd >= 0 else { return }
+        var line = data
+        line.append(UInt8(ascii: "\n"))
+        writeAll(line, to: fd)
+        close()
+    }
+
+    /// Closes the connection without a reply; the client reads EOF.
+    public func close() {
+        guard fd >= 0 else { return }
+        Darwin.close(fd)
+        fd = -1
+    }
+}
+
+/// Serves the control socket; `respond` runs on the main actor and answers
+/// through the `ControlReply`, at once or later.
 @MainActor
 public enum ControlServer {
-    public static func listen(path: String, respond: @escaping @MainActor (ControlRequest) -> Data?) throws -> SocketListener {
+    public static func listen(path: String, respond: @escaping @MainActor (ControlRequest, ControlReply) -> Void) throws -> SocketListener {
         try SocketListener.unix(path: path) { client in
             // Read off the accept loop, so a client that sends nothing can't
             // hold up the others for the 5 s timeout.
@@ -64,11 +128,7 @@ public enum ControlServer {
                     return
                 }
                 Task { @MainActor in
-                    if var reply = respond(request) {
-                        reply.append(UInt8(ascii: "\n"))
-                        writeAll(reply, to: client)
-                    }
-                    close(client)
+                    respond(request, ControlReply(fd: client))
                 }
             }
         }

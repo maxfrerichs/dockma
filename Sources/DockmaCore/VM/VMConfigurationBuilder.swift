@@ -1,10 +1,42 @@
 import Foundation
 import Virtualization
 
+/// The installed guest image (kernel, initramfs and its protocol number).
+public enum GuestImage {
+    /// The host↔guest protocol this binary speaks. Mirrored by
+    /// `vm/agent/protocol`; bump both on an incompatible change. Images
+    /// without a protocol file are version 1.
+    public static let protocolVersion = 2
+
+    /// Throws when the guest image is missing or speaks another protocol.
+    public static func validate(paths: Paths) throws {
+        for url in [paths.kernel, paths.initrd] where !FileManager.default.fileExists(atPath: url.path) {
+            throw DockmaError("guest image missing: \(url.path)\nBuild it with `make guest install-guest`.")
+        }
+        let installed = installedProtocol(at: paths.guestProtocol)
+        guard installed == protocolVersion else {
+            let age = installed < protocolVersion ? "older" : "newer"
+            throw DockmaError("""
+                the guest image in \(paths.guest.path) is \(age) than this dockma \
+                (guest protocol \(installed), need \(protocolVersion)).
+                Rebuild it with `make guest install-guest`.
+                """)
+        }
+    }
+
+    /// The protocol number in the image's protocol file: 1 when the file is
+    /// missing, 0 when it doesn't hold a number.
+    static func installedProtocol(at url: URL) -> Int {
+        guard let data = FileManager.default.contents(atPath: url.path) else { return 1 }
+        return Int(String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+    }
+}
+
 /// Turns `Config` + `Paths` into a validated `VZVirtualMachineConfiguration`.
 @MainActor
 public enum VMConfigurationBuilder {
-    /// vsock ports served by dockma-agent in the guest.
+    /// vsock ports served by dockma-agent in the guest, except `control`,
+    /// which the host serves and the agent dials.
     public enum Port {
         public static let docker: UInt32 = 1024
         public static let control: UInt32 = 1025
@@ -25,9 +57,7 @@ public enum VMConfigurationBuilder {
         consoleLog: FileHandle,
         dockerLog: FileHandle
     ) throws -> Output {
-        for url in [paths.kernel, paths.initrd] where !FileManager.default.fileExists(atPath: url.path) {
-            throw DockmaError("guest image missing: \(url.path) (run `make guest install-guest`)")
-        }
+        try GuestImage.validate(paths: paths)
 
         let bootLoader = VZLinuxBootLoader(kernelURL: paths.kernel)
         bootLoader.initialRamdiskURL = paths.initrd

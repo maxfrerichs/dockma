@@ -1,6 +1,7 @@
-// dockma-agent runs inside the dockma VM. It serves four vsock ports for the
-// macOS host: a byte proxy to dockerd's socket, a JSON-lines control channel,
-// TCP tunnels for published container ports, and shell sessions.
+// dockma-agent runs inside the dockma VM. It serves three vsock ports for the
+// macOS host: a byte proxy to dockerd's socket, TCP tunnels for published
+// container ports, and shell sessions. It also dials the host's JSON-lines
+// control port, so the host learns the moment the agent is up.
 package main
 
 import (
@@ -15,6 +16,7 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -24,7 +26,7 @@ import (
 )
 
 const (
-	version = "0.3.0"
+	version = "0.4.0"
 
 	dockerPort  = 1024
 	controlPort = 1025
@@ -46,7 +48,26 @@ func main() {
 	})
 	go serve(tunnelPort, handleTunnel)
 	go serve(shellPort, handleShell)
-	serve(controlPort, func(c net.Conn) { handleControl(c, ports) })
+	dialControl(ports)
+}
+
+// dialControl keeps a control connection to the host open. The host listens
+// before the VM boots, so the retry only covers a host that went away.
+func dialControl(ports *portWatcher) {
+	var lastErr string
+	for {
+		c, err := vsock.Dial(vsock.Host, controlPort, nil)
+		if err != nil {
+			if err.Error() != lastErr {
+				log.Printf("dial host vsock:%d: %v", controlPort, err)
+				lastErr = err.Error()
+			}
+		} else {
+			lastErr = ""
+			handleControl(c, ports)
+		}
+		time.Sleep(time.Second)
+	}
 }
 
 // serve accepts vsock connections on port forever, one goroutine each.
@@ -147,7 +168,13 @@ type message struct {
 	Version   string          `json:"version,omitempty"`
 	Kernel    string          `json:"kernel,omitempty"`
 	Ports     []ForwardedPort `json:"ports,omitempty"`
+	Ready     *bool           `json:"ready,omitempty"`
 	UnixNanos int64           `json:"unixNanos,omitempty"`
+}
+
+// dockerMessage reports whether dockerd's API answers.
+func dockerMessage(ready bool) message {
+	return message{Type: "docker", Ready: &ready}
 }
 
 func handleControl(c net.Conn, ports *portWatcher) {
@@ -170,11 +197,22 @@ func handleControl(c net.Conn, ports *portWatcher) {
 	updates, cancel := ports.subscribe()
 	defer cancel()
 	go func() {
-		for set := range updates {
-			if send(message{Type: "ports", Ports: nonNil(set)}) != nil {
-				c.Close()
-				return
+		var sent *watcherState
+		for state := range updates {
+			// Each message goes out first with the initial state, then only on change.
+			if sent == nil || sent.DockerReady != state.DockerReady {
+				if send(dockerMessage(state.DockerReady)) != nil {
+					c.Close()
+					return
+				}
 			}
+			if sent == nil || !equalPorts(sent.Ports, state.Ports) {
+				if send(message{Type: "ports", Ports: nonNil(state.Ports)}) != nil {
+					c.Close()
+					return
+				}
+			}
+			sent = &state
 		}
 	}()
 
@@ -233,18 +271,26 @@ func setTime(unixNanos int64) {
 	}
 }
 
-// portWatcher tracks published ports via the Docker API and fans the current
-// set out to subscribers (one per host control connection).
+// watcherState is what the port watcher fans out: the published ports and
+// whether dockerd's API answers.
+type watcherState struct {
+	Ports       []ForwardedPort
+	DockerReady bool
+}
+
+// portWatcher tracks published ports and dockerd's readiness via the Docker
+// API and fans the current state out to subscribers (one per host control
+// connection).
 type portWatcher struct {
 	mu      sync.Mutex
-	current []ForwardedPort
-	subs    map[chan []ForwardedPort]struct{}
+	current watcherState
+	subs    map[chan watcherState]struct{}
 	client  *http.Client
 }
 
 func newPortWatcher() *portWatcher {
 	return &portWatcher{
-		subs: map[chan []ForwardedPort]struct{}{},
+		subs: map[chan watcherState]struct{}{},
 		client: &http.Client{Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 				var d net.Dialer
@@ -254,11 +300,11 @@ func newPortWatcher() *portWatcher {
 	}
 }
 
-// subscribe returns a channel that receives the current set immediately and
-// every later change. The channel holds only the latest set. Cancelling
+// subscribe returns a channel that receives the current state immediately and
+// every later change. The channel holds only the latest state. Cancelling
 // closes it, which ends the subscriber's range loop.
-func (w *portWatcher) subscribe() (<-chan []ForwardedPort, func()) {
-	ch := make(chan []ForwardedPort, 1)
+func (w *portWatcher) subscribe() (<-chan watcherState, func()) {
+	ch := make(chan watcherState, 1)
 	w.mu.Lock()
 	w.subs[ch] = struct{}{}
 	ch <- w.current
@@ -266,7 +312,7 @@ func (w *portWatcher) subscribe() (<-chan []ForwardedPort, func()) {
 	return ch, func() {
 		w.mu.Lock()
 		defer w.mu.Unlock()
-		// publish sends only under mu to channels still in subs.
+		// update sends only under mu to channels still in subs.
 		if _, ok := w.subs[ch]; ok {
 			delete(w.subs, ch)
 			close(ch)
@@ -274,19 +320,32 @@ func (w *portWatcher) subscribe() (<-chan []ForwardedPort, func()) {
 	}
 }
 
+// publish records the published ports.
 func (w *portWatcher) publish(set []ForwardedPort) {
+	w.update(func(s *watcherState) { s.Ports = set })
+}
+
+// setDockerReady records whether dockerd's API answers.
+func (w *portWatcher) setDockerReady(ready bool) {
+	w.update(func(s *watcherState) { s.DockerReady = ready })
+}
+
+// update applies change and, if the state differs, sends it to subscribers.
+func (w *portWatcher) update(change func(*watcherState)) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if equalPorts(w.current, set) {
+	next := w.current
+	change(&next)
+	if next.DockerReady == w.current.DockerReady && equalPorts(next.Ports, w.current.Ports) {
 		return
 	}
-	w.current = set
+	w.current = next
 	for ch := range w.subs {
 		select {
 		case <-ch:
 		default:
 		}
-		ch <- set
+		ch <- next
 	}
 }
 
@@ -305,7 +364,15 @@ func equalPorts(a, b []ForwardedPort) bool {
 func (w *portWatcher) run(ctx context.Context) {
 	var lastErr string
 	for {
+		// Armed before the attempt, so a socket created during it still
+		// wakes the wait below.
+		waiter, waiterErr := newFileWaiter(filepath.Dir(dockerSocket), filepath.Base(dockerSocket))
+		if waiterErr != nil && waiterErr.Error() != lastErr {
+			log.Printf("port watcher: %v", waiterErr)
+			lastErr = waiterErr.Error()
+		}
 		err := w.watch(ctx)
+		w.setDockerReady(false)
 		// dockerd not listening yet (boot, restart) is expected; other errors
 		// are logged once each instead of every second.
 		waiting := errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED)
@@ -313,7 +380,16 @@ func (w *portWatcher) run(ctx context.Context) {
 			log.Printf("port watcher: %v", err)
 			lastErr = err.Error()
 		}
-		time.Sleep(time.Second)
+		if waiting && waiter != nil {
+			// dockerd creates its socket when it starts listening. The
+			// timeout covers a create that raced the failed dial.
+			waiter.wait(2 * time.Second)
+		} else {
+			time.Sleep(time.Second)
+		}
+		if waiter != nil {
+			waiter.close()
+		}
 	}
 }
 
@@ -330,6 +406,8 @@ func (w *portWatcher) watch(ctx context.Context) error {
 	if err := w.relist(ctx); err != nil {
 		return err
 	}
+	// The event stream is open and a request succeeded: the API answers.
+	w.setDockerReady(true)
 	decoder := json.NewDecoder(resp.Body)
 	for {
 		var event struct {

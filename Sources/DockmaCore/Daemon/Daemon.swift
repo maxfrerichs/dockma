@@ -14,9 +14,13 @@ public final class Daemon {
     private var agent: AgentClient?
     private var ports: PortForwarder?
     private var listeners: [SocketListener] = []
+    /// `wait` requests to answer once Docker is ready.
+    private var readyWaiters: [ControlReply] = []
     private var signalSources: [DispatchSourceSignal] = []
     private var state: DaemonStatus.State = .starting
     private var stopRequested = false
+    /// The hard stop that ends the shutdown grace period.
+    private var forceStopTask: Task<Void, Never>?
     private var warnings: [String] = []
     private var lockFD: Int32 = -1
     private let startedAt = Date()
@@ -69,6 +73,13 @@ public final class Daemon {
         try Paths.validateSocketPath(paths.controlSocket)
         try Paths.validateSocketPath(paths.shellSocket)
 
+        // Listen first: a `dockma start` waiting on this socket then sees
+        // every later startup failure as the connection closing.
+        listeners.append(try ControlServer.listen(path: paths.controlSocket.path) { [weak self] request, reply in
+            guard let self else { return reply.close() }
+            self.handle(request, reply: reply)
+        })
+
         config = try Config.load(from: paths.config)
         try config.validate()
         if config.macAddress == nil {
@@ -89,9 +100,33 @@ public final class Daemon {
         host.onStop = { [weak self] error in self?.vmStopped(error: error) }
         self.host = host
 
-        listeners.append(try ControlServer.listen(path: paths.controlSocket.path) { [weak self] request in
-            self?.handle(request)
-        })
+        let ports = PortForwarder(host: host, bindAddress: config.portBindAddress)
+        self.ports = ports
+        let agent = AgentClient()
+        agent.onPorts = { [weak self] set in
+            guard let self, !self.stopRequested else { return }
+            ports.update(set)
+        }
+        agent.onConnect = { [weak self] in
+            guard let self else { return }
+            if self.stopRequested {
+                // A stop during boot can come before the agent runs; it can
+                // still power the guest off cleanly.
+                if self.agent?.send(.shutdown) == true {
+                    Log.info("agent connected during stop, asked the guest to power off")
+                    self.scheduleForceStop(after: Self.shutdownGrace)
+                }
+                return
+            }
+            if self.state == .starting { self.state = .running }
+            self.agent?.send(.setTime(Date()))
+        }
+        agent.onDockerReadyChange = { [weak self] ready in
+            if ready { self?.answerReadyWaiters() }
+        }
+        self.agent = agent
+        // The agent dials the host as soon as it runs.
+        try host.listen(onPort: VMConfigurationBuilder.Port.control) { fd in agent.accept(fd) }
 
         Log.info("starting VM: \(config.cpus) CPUs, \(config.memoryMiB) MiB, home \(paths.home.path)")
         Task {
@@ -119,21 +154,6 @@ public final class Daemon {
             return
         }
 
-        let ports = PortForwarder(host: host, bindAddress: config.portBindAddress)
-        self.ports = ports
-        let agent = AgentClient(host: host)
-        agent.onPorts = { [weak self] set in
-            guard let self, !self.stopRequested else { return }
-            ports.update(set)
-        }
-        agent.onConnect = { [weak self] in
-            guard let self else { return }
-            if self.state == .starting { self.state = .running }
-            self.agent?.send(.setTime(Date()))
-        }
-        self.agent = agent
-        agent.start()
-
         // Clocks drift apart while the Mac sleeps; the agent steps the guest
         // clock only when it is off by more than half a second.
         Task { [weak self] in
@@ -145,21 +165,11 @@ public final class Daemon {
         }
     }
 
-    private func handle(_ request: ControlRequest) -> Data? {
+    /// Answers a control request, at once or (for `wait`) once Docker is ready.
+    private func handle(_ request: ControlRequest, reply: ControlReply) {
         switch request.command {
         case .status:
-            let status = DaemonStatus(
-                state: state,
-                pid: getpid(),
-                startedAt: startedAt,
-                cpus: config.cpus,
-                memoryMiB: config.memoryMiB,
-                agentConnected: agent?.isConnected ?? false,
-                agentVersion: agent?.version,
-                guestKernel: agent?.kernel,
-                forwardedPorts: ports?.ports ?? [],
-                warnings: warnings)
-            return try? JSONEncoder().encode(status)
+            sendStatus(to: reply)
         case .stop:
             // requestStop() can exit at once (VM not running yet), so defer it:
             // the reply is written in this same main-actor job, before the
@@ -167,8 +177,47 @@ public final class Daemon {
             DispatchQueue.main.async { [weak self] in
                 MainActor.assumeIsolated { self?.requestStop() }
             }
-            return Data("{}".utf8)
+            reply.send(Data("{}".utf8))
+        case .wait:
+            if stopRequested {
+                reply.close()
+            } else if agent?.isDockerReady == true {
+                sendStatus(to: reply)
+            } else {
+                readyWaiters.append(reply)
+            }
         }
+    }
+
+    /// Replies with the current `DaemonStatus`.
+    private func sendStatus(to reply: ControlReply) {
+        let status = DaemonStatus(
+            state: state,
+            pid: getpid(),
+            startedAt: startedAt,
+            cpus: config.cpus,
+            memoryMiB: config.memoryMiB,
+            agentConnected: agent?.isConnected ?? false,
+            agentVersion: agent?.version,
+            guestKernel: agent?.kernel,
+            forwardedPorts: ports?.ports ?? [],
+            warnings: warnings)
+        guard let data = try? JSONEncoder().encode(status) else { return reply.close() }
+        reply.send(data)
+    }
+
+    /// Replies to every pending `wait` request with the current status.
+    private func answerReadyWaiters() {
+        guard !stopRequested else { return }
+        let waiters = readyWaiters
+        readyWaiters.removeAll()
+        waiters.forEach(sendStatus(to:))
+    }
+
+    /// Closes pending `wait` requests without a reply.
+    private func closeReadyWaiters() {
+        readyWaiters.forEach { $0.close() }
+        readyWaiters.removeAll()
     }
 
     /// Graceful shutdown: ask the agent to power off (fall back to the virtual
@@ -182,20 +231,35 @@ public final class Daemon {
         ports?.removeAll()
         listeners.forEach { $0.cancel() }
         listeners.removeAll()
+        closeReadyWaiters()
 
         guard let host, host.isRunning else {
             exit(0)
         }
         // Without the agent nothing in the guest can act on a shutdown request
         // (the virtual power button needs an input-event handler the minimal
-        // guest doesn't run), so only a short grace period is useful.
-        var grace = Self.shutdownGrace
-        if agent?.send(.shutdown) != true {
-            Log.info("agent not connected, stopping VM")
-            grace = .seconds(2)
+        // guest doesn't run). A booting guest's agent dials in within about a
+        // second and gets the request then (see onConnect); otherwise only a
+        // short grace period is useful.
+        if agent?.send(.shutdown) == true {
+            scheduleForceStop(after: Self.shutdownGrace)
+        } else {
+            Log.info("agent not connected; stopping VM in 2 s unless it connects")
+            scheduleForceStop(after: .seconds(2))
         }
-        Task {
-            try? await Task.sleep(for: grace)
+    }
+
+    /// Hard-stops the VM after `grace` unless the guest powers off first,
+    /// replacing an earlier schedule.
+    private func scheduleForceStop(after grace: Duration) {
+        guard let host else { return }
+        forceStopTask?.cancel()
+        forceStopTask = Task {
+            do {
+                try await Task.sleep(for: grace)
+            } catch {
+                return  // Rescheduled.
+            }
             Log.info("guest did not power off in time, stopping VM")
             try? await host.forceStop()
             self.cleanUp()
@@ -228,6 +292,7 @@ public final class Daemon {
         closeForwarding()
         listeners.forEach { $0.cancel() }
         listeners.removeAll()
+        closeReadyWaiters()
     }
 
     /// Keeps one previous log as `<name>.1` and opens a fresh file (mode 0600)

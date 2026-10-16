@@ -19,13 +19,16 @@ public struct AgentMessage: Codable, Equatable, Sendable {
     public var version: String?
     public var kernel: String?
     public var ports: [ForwardedPort]?
+    /// Whether dockerd's API answers; set on `docker` messages.
+    public var ready: Bool?
     public var unixNanos: Int64?
 
-    public init(type: String, version: String? = nil, kernel: String? = nil, ports: [ForwardedPort]? = nil, unixNanos: Int64? = nil) {
+    public init(type: String, version: String? = nil, kernel: String? = nil, ports: [ForwardedPort]? = nil, ready: Bool? = nil, unixNanos: Int64? = nil) {
         self.type = type
         self.version = version
         self.kernel = kernel
         self.ports = ports
+        self.ready = ready
         self.unixNanos = unixNanos
     }
 

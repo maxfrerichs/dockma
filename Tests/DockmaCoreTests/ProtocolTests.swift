@@ -12,6 +12,16 @@ import Testing
 
     let empty = try JSONDecoder().decode(AgentMessage.self, from: Data(#"{"type":"ports"}"#.utf8))
     #expect(empty.ports == nil)
+
+    // The same JSON is asserted in vm/agent/control_test.go.
+    let docker = try JSONDecoder().decode(AgentMessage.self, from: Data(#"{"type":"docker","ready":true}"#.utf8))
+    #expect(docker == AgentMessage(type: "docker", ready: true))
+}
+
+/// `wait` is a wire string; an older daemon fails to decode it.
+@Test func encodesWaitRequest() throws {
+    let line = try jsonLine(ControlRequest(command: .wait))
+    #expect(String(decoding: line, as: UTF8.self) == #"{"command":"wait"}"# + "\n")
 }
 
 @Test func encodesHostMessagesAsSingleLines() throws {
@@ -52,6 +62,14 @@ import Testing
     let output = "gui/501/io.dockma.daemon = {\n\tactive count = 1\n\tstate = running\n\tpid = 4242\n\tprogram = /x\n}"
     #expect(LaunchAgent.parsePID(launchctlPrint: output) == 4242)
     #expect(LaunchAgent.parsePID(launchctlPrint: "\tstate = not running\n") == nil)
+    #expect(LaunchAgent.field("runs", launchctlPrint: "\tstate = not running\n\truns = 1\n\tlast exit code = 0\n") == "1")
+}
+
+@Test func jobThatRanWithoutProcessHasExited() {
+    #expect(LaunchAgent.JobState(isLoaded: true, pid: nil, runCount: 1).hasExited)
+    #expect(LaunchAgent.JobState(isLoaded: true, pid: nil, runCount: 0).hasExited == false)
+    #expect(LaunchAgent.JobState(isLoaded: true, pid: 42, runCount: 1).hasExited == false)
+    #expect(LaunchAgent.JobState(isLoaded: false, pid: nil).hasExited)
 }
 
 @Test func dockerHintDependsOnDockerHost() {

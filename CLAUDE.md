@@ -17,11 +17,16 @@ The vsock ports are defined in `VMConfigurationBuilder.Port` and duplicated in `
 | Port | Purpose |
 |------|---------|
 | 1024 | Byte proxy to `/var/run/docker.sock`. The host serves it as `~/.dockma/docker.sock`. |
-| 1025 | JSON-lines control. `AgentMessage` (Swift) mirrors `message` (Go). Guest→host: `hello`, `ports`. Host→guest: `settime`, `shutdown`. |
+| 1025 | JSON-lines control. **The host listens and the agent dials** (`VMHost.listen(onPort:accept:)`, installed before the VM starts). `AgentMessage` (Swift) mirrors `message` (Go). Guest→host: `hello`, `docker` (`ready`: whether dockerd's API answers), `ports`. Host→guest: `settime`, `shutdown`. |
 | 1026 | TCP tunnel. The first line is `tcp <host:port>`; raw bytes follow. |
 | 1027 | `dockma shell` sessions. Frames are `[type u8][len u32 BE][payload]`. The types are defined in `ShellFrame` (`Sources/DockmaCore/Shell/ShellProtocol.swift`) and mirrored in `vm/agent/shell.go`; change both together. A golden `resize` byte sequence is asserted in both test suites. The host serves this port as `~/.dockma/shell.sock`, and the daemon only proxies bytes. |
 
-The host CLI talks to the daemon over `~/.dockma/control.sock`: one JSON line in (`ControlRequest`), one line out (`DaemonStatus`).
+The host CLI talks to the daemon over `~/.dockma/control.sock`: one JSON line in (`ControlRequest`), one line out (`DaemonStatus`). `wait` is answered only once the agent reports Docker ready. If the daemon stops or exits first, the connection closes without a reply. `dockma start` waits on this, plus kqueue events for the socket appearing and the daemon exiting. The fallbacks that remain:
+- Until it knows the daemon's pid, `start` asks `launchctl` again on each wake, or after 1 s without one.
+- The agent retries a failed host dial after 1 s.
+- While dockerd's socket is missing, the agent waits on inotify, with a 2 s fallback. It sleeps 1 s after other errors, or when the events stream ends.
+
+The guest image carries a protocol number: `vm/agent/protocol`, installed as `~/.dockma/guest/guest-protocol`. It must equal `GuestImage.protocolVersion`, and a test asserts that. Bump both on any incompatible host↔guest change. `start` and the daemon refuse a mismatched guest with a rebuild hint.
 
 The home directory is shared via virtiofs (tag `home`) and mounted in the guest **at the same host path**. The path is passed percent-encoded as `dockma.home=` on the kernel cmdline and decoded in `rcS`. Rosetta is the virtiofs tag `rosetta`, registered with binfmt_misc using flags `CF`.
 
@@ -33,16 +38,16 @@ The core library lives in `Sources/DockmaCore/`, grouped by area. Rows from Daem
 |---|---|
 | CLI commands | `Sources/DockmaCLI/Dockma.swift` — all subcommands, plus log tailing and following |
 | Daemon lifecycle | `Daemon/Daemon.swift` — boot, signal handling, graceful stop, exit codes, time sync, log rotation |
-| VM | `VM/VMConfigurationBuilder.swift` (devices, data disk), `VM/VMHost.swift` (VZ wrapper, vsock connect), `VM/KernelCmdline.swift`, `VM/Entitlements.swift` |
+| VM | `VM/VMConfigurationBuilder.swift` (devices, data disk, `GuestImage` protocol check), `VM/VMHost.swift` (VZ wrapper, vsock connect), `VM/KernelCmdline.swift`, `VM/Entitlements.swift` |
 | Forwarding | `Forwarding/` — `SocketListener` (unix/TCP accept via dispatch source), `SocketCopier` (bidirectional copy with half-close), `VsockSocketProxy` (unix socket → agent vsock port; docker and shell), `PortForwarder` (reconciles the agent's port set into listeners) |
 | Shell client | `Shell/ShellProtocol.swift` (frames, incremental decoder), `Shell/ShellSession.swift` (raw TTY, SIGWINCH, signal forwarding, stdin/output pumps) |
-| Agent link | `Agent/AgentClient.swift` (reconnecting control client), `Agent/AgentProtocol.swift` |
+| Agent link | `Agent/AgentClient.swift` (accepts the agent's control connection, tracks Docker readiness), `Agent/AgentProtocol.swift` |
 | launchd and CLI↔daemon | `Daemon/LaunchAgent.swift`, `Daemon/ControlProtocol.swift` (also `UnixSocket`, `DockerPing`) |
 | Settings and paths | `Settings/Config.swift`, `Settings/Paths.swift` (also `DockmaError`) |
-| Support | `Support/Subprocess.swift` (runs launchctl and docker), `Support/LineIO.swift`, `Support/Log.swift`, `Support/DockerContext.swift` |
+| Support | `Support/Subprocess.swift` (runs launchctl and docker), `Support/KernelEvents.swift` (kqueue waits for a process exit or directory change), `Support/LineIO.swift`, `Support/Log.swift`, `Support/DockerContext.swift` |
 | Guest build | `vm/Dockerfile`, `vm/kernel/dockma.config`, `vm/kernel/check-docker-config.sh` |
 | Guest boot | `vm/rootfs/init` (stage 0), `etc/inittab`, `etc/init.d/{rcS,dockerd,shutdown}`, `usr/libexec/dockma-disk` (data disk: format only when blank; tested by `vm/tests/dockma-disk-test.sh` in the guest build), `etc/docker/daemon.json`, `etc/profile` (shell prompt; runs `usr/libexec/dockma-motd`, the whalesay-style greeting on interactive logins, tested by `vm/tests/dockma-motd-test.sh`), `usr/share/udhcpc/default.script` |
-| Guest agent | `vm/agent/main.go` (servers, control, port watcher), `ports.go` (pure port extraction), `shell.go` (shell sessions on a pty via creack/pty or on pipes) |
+| Guest agent | `vm/agent/main.go` (servers, control dialer, port watcher and Docker readiness), `filewaiter.go` (inotify wait for dockerd's socket), `ports.go` (pure port extraction), `shell.go` (shell sessions on a pty via creack/pty or on pipes) |
 
 ## Commands
 
@@ -76,7 +81,7 @@ No linter or formatter is configured.
 - **The daemon's exit code drives launchd.** `KeepAlive.SuccessfulExit=false` means:
   - Exit 0 is a requested stop or a startup failure, so there is no restart loop.
   - Non-zero is an unexpected guest poweroff or a VM error, and launchd restarts the daemon.
-- **`launchctl bootout` returns before the daemon exits.** `LaunchAgent.bootout()` polls until the job is gone.
+- **`launchctl bootout` returns before the daemon exits.** `LaunchAgent.bootout()` waits for the daemon's pid to exit (kqueue). launchd then removes the job without any event, so a short `launchctl` check loop remains after the exit.
 - **Guest consoles are TTYs.** Logs arrive with `\r\n` line endings, which Swift treats as a single Character, so split them with `isNewline`.
 - **Kernel config gates in the Dockerfile.**
   - Every option in `vm/kernel/dockma.config` must survive `olddefconfig`. A dropped option means an unmet dependency. Every `# CONFIG_X is not set` line must stay disabled; another option's `select` can turn it back on.
