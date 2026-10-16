@@ -199,10 +199,10 @@ dockma shell ► ~/.dockma/shell.sock  │                        │
   - proxies vsock to the Docker socket;
   - watches the Docker events API for published TCP ports and reports them to the host;
   - dials tunnelled connections inside the VM;
-  - runs `dockma shell` sessions. Each session uses a small framed protocol (start, stdin, resize, signal, started, stdout, stderr, exit) and runs on a pty or on pipes;
+  - runs `dockma shell` sessions. Each session uses a small framed protocol (start, stdin, resize, signal, started, stdout, stderr, exit, window) and runs on a pty or on pipes. `window` frames grant stdin credit, so a signal is never stuck behind stdin the command doesn't read;
   - steps the guest clock to host time every 30 s, which fixes drift after the Mac sleeps.
 
-**Guest image.** `vm/Dockerfile` builds everything reproducibly with pinned versions: kernel 6.18.57, Docker 29.9.1 (sha256-checked), Alpine 3.24 and Go 1.27. It has two build gates:
+**Guest image.** `vm/Dockerfile` builds everything reproducibly with pinned versions: kernel 6.18.57, Docker 29.9.1 and moby's `check-config.sh` (all sha256-checked), Alpine 3.24 and Go 1.27. It has two build gates:
 1. Every option in `vm/kernel/dockma.config` must survive `olddefconfig`.
 2. The kernel config must pass moby's `check-config.sh` required list. The iptables-only options are exempt because of the nftables backend.
 

@@ -8,13 +8,19 @@ public struct ShellStart: Codable, Equatable, Sendable {
     public var rows: UInt16
     public var cols: UInt16
     public var term: String
+    /// Asks for stdin flow control: the agent grants stdin credit with
+    /// `window` frames, so it never stops reading the connection and signals
+    /// can't get stuck behind stdin the command doesn't read. Older agents
+    /// ignore the field and never send `window`.
+    public var flow: Bool
 
-    public init(argv: [String], tty: Bool, rows: UInt16, cols: UInt16, term: String) {
+    public init(argv: [String], tty: Bool, rows: UInt16, cols: UInt16, term: String, flow: Bool = true) {
         self.argv = argv
         self.tty = tty
         self.rows = rows
         self.cols = cols
         self.term = term
+        self.flow = flow
     }
 }
 
@@ -35,6 +41,9 @@ public enum ShellFrame: Equatable, Sendable {
     case error(String)
     /// The command is running; sent once, before any output.
     case started
+    /// Stdin credit in bytes. With flow control the first one arrives before
+    /// `started`; later ones return credit as the agent writes stdin.
+    case window(UInt32)
 
     public static let maxPayloadSize = 1 << 20
 
@@ -50,6 +59,7 @@ public enum ShellFrame: Equatable, Sendable {
         case .exit: 18
         case .error: 19
         case .started: 20
+        case .window: 21
         }
     }
 
@@ -67,6 +77,8 @@ public enum ShellFrame: Equatable, Sendable {
             return Data([UInt8(truncatingIfNeeded: number)])
         case .exit(let code):
             return Self.bigEndian(UInt32(bitPattern: code))
+        case .window(let bytes):
+            return Self.bigEndian(bytes)
         case .error(let message):
             return Data(message.utf8)
         }
@@ -101,6 +113,9 @@ public enum ShellFrame: Equatable, Sendable {
             return .exit(Int32(bitPattern: uint32()))
         case 19: return .error(String(decoding: payload, as: UTF8.self))
         case 20: return .started
+        case 21:
+            guard payload.count == 4 else { throw DockmaError("malformed window frame") }
+            return .window(uint32())
         default: throw DockmaError("unknown shell frame type \(type)")
         }
     }

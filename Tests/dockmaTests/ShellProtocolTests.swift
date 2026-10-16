@@ -11,6 +11,11 @@ private func hex(_ data: Data) -> String {
     #expect(hex(try ShellFrame.resize(rows: 24, cols: 80).encode()) == "040000000400180050")
 }
 
+/// The same bytes are asserted in vm/agent/shell_test.go.
+@Test func windowFrameMatchesAgentGolden() throws {
+    #expect(hex(try ShellFrame.window(256 * 1024).encode()) == "150000000400040000")
+}
+
 @Test(arguments: [
     ShellFrame.start(ShellStart(argv: ["uname", "-a"], tty: false, rows: 24, cols: 80, term: "xterm")),
     .stdin(Data("input".utf8)),
@@ -23,6 +28,7 @@ private func hex(_ data: Data) -> String {
     .exit(-1),
     .error("cannot run"),
     .started,
+    .window(256 * 1024),
 ])
 func framesRoundTrip(frame: ShellFrame) throws {
     var decoder = ShellFrameDecoder()
@@ -56,5 +62,6 @@ func framesRoundTrip(frame: ShellFrame) throws {
 @Test func startFrameUsesAgentFieldNames() throws {
     let payload = try ShellFrame.start(ShellStart(argv: [], tty: true, rows: 1, cols: 2, term: "t")).encode().dropFirst(5)
     let json = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
-    #expect(Set(json.keys) == ["argv", "tty", "rows", "cols", "term"])
+    #expect(Set(json.keys) == ["argv", "tty", "rows", "cols", "term", "flow"])
+    #expect(json["flow"] as? Bool == true)
 }

@@ -30,8 +30,13 @@ const (
 	frameExit     byte = 18 // agent: exit code i32, 128+n when killed by signal n
 	frameError    byte = 19 // agent: UTF-8 message; the session is over
 	frameStarted  byte = 20 // agent: the command is running (lets the client tell a dropped session from an old agent)
+	frameWindow   byte = 21 // agent: stdin credit u32 in bytes (only when the client asked for flow control)
 
 	maxFrameSize = 1 << 20
+	// Stdin credit granted up front. A client with flow control never has
+	// more stdin than this in flight, so the agent can always keep reading
+	// the connection: signals and resizes never wait behind unread stdin.
+	stdinWindow = 256 * 1024
 	// How long output may keep flowing after the command exited; background
 	// processes can hold the pty or pipes open indefinitely.
 	outputDrainTimeout = 200 * time.Millisecond
@@ -45,6 +50,7 @@ type shellStart struct {
 	Rows uint16   `json:"rows"`
 	Cols uint16   `json:"cols"`
 	Term string   `json:"term"`
+	Flow bool     `json:"flow"`
 }
 
 func readFrame(r io.Reader) (byte, []byte, error) {
@@ -102,6 +108,103 @@ func (fw *frameWriter) exit(code int) error {
 	fw.done = true
 	_, err := fw.w.Write(encodeFrame(frameExit, p[:]))
 	return err
+}
+
+func uint32Payload(n int) []byte {
+	var p [4]byte
+	binary.BigEndian.PutUint32(p[:], uint32(n))
+	return p[:]
+}
+
+// stdinQueue holds stdin until the command reads it, so readInput never
+// blocks on a command that doesn't. A client within its credit keeps the
+// queue under stdinWindow; push waits beyond that only for a client that
+// ignores its credit, which keeps memory bounded either way.
+type stdinQueue struct {
+	mu     sync.Mutex
+	cond   *sync.Cond
+	chunks [][]byte
+	size   int
+	eof    bool // stdinEOF received; queued data still goes first
+	closed bool // the session is over
+}
+
+func newStdinQueue() *stdinQueue {
+	q := &stdinQueue{}
+	q.cond = sync.NewCond(&q.mu)
+	return q
+}
+
+func (q *stdinQueue) push(p []byte) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for q.size > 0 && q.size+len(p) > stdinWindow && !q.closed {
+		q.cond.Wait()
+	}
+	if q.closed || q.eof {
+		return
+	}
+	q.chunks = append(q.chunks, p)
+	q.size += len(p)
+	q.cond.Broadcast()
+}
+
+func (q *stdinQueue) closeInput() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.eof = true
+	q.cond.Broadcast()
+}
+
+func (q *stdinQueue) close() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.closed = true
+	q.chunks = nil
+	q.cond.Broadcast()
+}
+
+// next waits for the next chunk. It reports eof once the queue is drained
+// after stdinEOF, and ok=false when the session is over.
+func (q *stdinQueue) next() (p []byte, eof, ok bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for len(q.chunks) == 0 && !q.eof && !q.closed {
+		q.cond.Wait()
+	}
+	switch {
+	case q.closed:
+		return nil, false, false
+	case len(q.chunks) == 0:
+		return nil, true, true
+	}
+	p = q.chunks[0]
+	q.chunks = q.chunks[1:]
+	q.size -= len(p)
+	q.cond.Broadcast()
+	return p, false, true
+}
+
+// writeStdin feeds queued stdin to the command and returns the credit.
+func writeStdin(q *stdinQueue, stdin io.WriteCloser, tty bool, fw *frameWriter) {
+	for {
+		p, eof, ok := q.next()
+		if !ok {
+			return
+		}
+		if eof {
+			if !tty {
+				stdin.Close()
+			}
+			return
+		}
+		// A command that closed its stdin drops the data, as without flow
+		// control; the credit comes back either way.
+		stdin.Write(p)
+		if fw.write(frameWindow, uint32Payload(len(p))) != nil {
+			return
+		}
+	}
 }
 
 // copyFrames forwards r as frames of type t until EOF or error.
@@ -202,12 +305,21 @@ func handleShell(c net.Conn) {
 		go copyFrames(fw, frameStderr, stderrR, &outputs)
 	}
 
+	var queue *stdinQueue
+	if start.Flow {
+		queue = newStdinQueue()
+		go writeStdin(queue, stdin, start.TTY, fw)
+		fw.write(frameWindow, uint32Payload(stdinWindow))
+	}
 	fw.write(frameStarted, nil)
 	exited := make(chan struct{})
-	go readInput(c, cmd.Process.Pid, stdin, ptmx, exited)
+	go readInput(c, cmd.Process.Pid, stdin, ptmx, queue, exited)
 
 	err = cmd.Wait()
 	close(exited)
+	if queue != nil {
+		queue.close()
+	}
 
 	drained := make(chan struct{})
 	go func() { outputs.Wait(); close(drained) }()
@@ -232,8 +344,10 @@ func handleShell(c net.Conn) {
 }
 
 // readInput applies client frames until the connection closes. A client that
-// disconnects mid-session hangs up the process group, then kills it.
-func readInput(c net.Conn, pid int, stdin io.WriteCloser, ptmx *os.File, exited <-chan struct{}) {
+// disconnects mid-session hangs up the process group, then kills it. With
+// flow control (queue != nil) stdin goes through the queue, so this loop
+// never blocks on a command that doesn't read its input.
+func readInput(c net.Conn, pid int, stdin io.WriteCloser, ptmx *os.File, queue *stdinQueue, exited <-chan struct{}) {
 	for {
 		t, payload, err := readFrame(c)
 		if err != nil {
@@ -252,9 +366,15 @@ func readInput(c net.Conn, pid int, stdin io.WriteCloser, ptmx *os.File, exited 
 		}
 		switch t {
 		case frameStdin:
-			stdin.Write(payload)
+			if queue != nil {
+				queue.push(payload)
+			} else {
+				stdin.Write(payload)
+			}
 		case frameStdinEOF:
-			if ptmx == nil {
+			if queue != nil {
+				queue.closeInput()
+			} else if ptmx == nil {
 				stdin.Close()
 			}
 		case frameResize:

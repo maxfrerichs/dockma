@@ -10,6 +10,14 @@ public final class ShellSession: @unchecked Sendable {
     private var signalSources: [DispatchSourceSignal] = []
     private var savedTerminal: termios?
 
+    /// Stdin flow control. `unknown` until the agent's first frame says
+    /// whether it grants credit (`window` before `started`) or predates flow
+    /// control (`started` alone). Guarded by `flowCondition`.
+    private enum StdinFlow { case unknown, credit, unlimited }
+    private let flowCondition = NSCondition()
+    private var flow = StdinFlow.unknown
+    private var credit = 0
+
     private init(fd: Int32, tty: Bool) {
         self.fd = fd
         self.tty = tty
@@ -63,16 +71,42 @@ public final class ShellSession: @unchecked Sendable {
         return receive()
     }
 
-    /// Copies local stdin into `stdin` frames, then signals EOF.
+    /// Copies local stdin into `stdin` frames, within the agent's credit,
+    /// then signals EOF.
     private func pumpStdin() {
         var buffer = [UInt8](repeating: 0, count: 32 * 1024)
         while true {
             let n = buffer.withUnsafeMutableBytes { read(STDIN_FILENO, $0.baseAddress, $0.count) }
             if n < 0 && errno == EINTR { continue }
             if n <= 0 { break }
-            if !send(.stdin(Data(buffer[0..<n]))) { return }
+            var offset = 0
+            while offset < n {
+                let count = takeCredit(upTo: n - offset)
+                if !send(.stdin(Data(buffer[offset..<(offset + count)]))) { return }
+                offset += count
+            }
         }
         send(.stdinEOF)
+    }
+
+    /// Blocks until stdin may be sent and returns how many of `wanted` bytes.
+    private func takeCredit(upTo wanted: Int) -> Int {
+        flowCondition.lock()
+        defer { flowCondition.unlock() }
+        while flow == .unknown || (flow == .credit && credit == 0) {
+            flowCondition.wait()
+        }
+        guard flow == .credit else { return wanted }
+        let granted = min(credit, wanted)
+        credit -= granted
+        return granted
+    }
+
+    private func updateFlow(_ change: () -> Void) {
+        flowCondition.lock()
+        change()
+        flowCondition.broadcast()
+        flowCondition.unlock()
     }
 
     /// Writes remote output locally until the exit frame arrives.
@@ -86,6 +120,12 @@ public final class ShellSession: @unchecked Sendable {
                     switch frame {
                     case .started:
                         started = true
+                        updateFlow { if flow == .unknown { flow = .unlimited } }
+                    case .window(let bytes):
+                        updateFlow {
+                            if flow == .unknown { flow = .credit }
+                            if flow == .credit { credit += Int(bytes) }
+                        }
                     case .stdout(let data):
                         writeAll(STDOUT_FILENO, data)
                     case .stderr(let data):
