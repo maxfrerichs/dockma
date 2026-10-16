@@ -255,7 +255,8 @@ func newPortWatcher() *portWatcher {
 }
 
 // subscribe returns a channel that receives the current set immediately and
-// every later change. The channel holds only the latest set.
+// every later change. The channel holds only the latest set. Cancelling
+// closes it, which ends the subscriber's range loop.
 func (w *portWatcher) subscribe() (<-chan []ForwardedPort, func()) {
 	ch := make(chan []ForwardedPort, 1)
 	w.mu.Lock()
@@ -264,8 +265,12 @@ func (w *portWatcher) subscribe() (<-chan []ForwardedPort, func()) {
 	w.mu.Unlock()
 	return ch, func() {
 		w.mu.Lock()
-		delete(w.subs, ch)
-		w.mu.Unlock()
+		defer w.mu.Unlock()
+		// publish sends only under mu to channels still in subs.
+		if _, ok := w.subs[ch]; ok {
+			delete(w.subs, ch)
+			close(ch)
+		}
 	}
 }
 
