@@ -2,6 +2,8 @@
 # Brings the system up: pseudo filesystems, network, data disk, host shares.
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 log() { echo "dockma: $*"; }
+# mark logs a boot phase with the guest uptime; scripts/bench.sh reads these.
+mark() { read -r up _ </proc/uptime; log "[$up] $*"; }
 
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
@@ -13,6 +15,7 @@ mount -t mqueue mqueue /dev/mqueue
 mount -t tmpfs -o mode=0755 tmpfs /run
 mount -t tmpfs -o mode=1777 tmpfs /tmp
 mount -t cgroup2 -o nsdelegate cgroup2 /sys/fs/cgroup
+mark "filesystems mounted"
 ln -sf /proc/self/fd /dev/fd
 ln -sf /proc/self/fd/0 /dev/stdin
 ln -sf /proc/self/fd/1 /dev/stdout
@@ -28,6 +31,7 @@ sysctl -q -w fs.inotify.max_user_instances=8192
 ip link set lo up
 ip link set eth0 up
 udhcpc -i eth0 -s /usr/share/udhcpc/default.script -t 20 -T 1 -A 2 -b || log "dhcp failed"
+mark "network up"
 
 # Persistent data disk: formatted only when blank, checked and mounted
 # otherwise. On failure dockma-disk leaves /run/dockma-disk-failed, which
@@ -39,6 +43,7 @@ if [ -b /dev/vda ]; then
 else
 	log "no data disk, /var/lib/docker is in RAM"
 fi
+mark "data disk ready"
 
 # The host home directory is mounted at the same path it has on the host so
 # bind mounts like `-v $PWD:/src` resolve. The path is percent-encoded.
@@ -58,4 +63,4 @@ if mount -t virtiofs rosetta /mnt/rosetta 2>/dev/null; then
 		>/proc/sys/fs/binfmt_misc/register || log "rosetta binfmt registration failed"
 fi
 
-log "boot complete"
+mark "boot complete"
