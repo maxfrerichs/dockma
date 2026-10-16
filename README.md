@@ -270,7 +270,8 @@ vm/rootfs/                init scripts, inittab, dockerd config, DHCP hook
 vm/agent/                 dockma-agent (Go) with tests
 vm/tests/                 guest script tests, run during the guest build
 scripts/e2e.sh            end-to-end test
-scripts/bench.sh          boot and network benchmark (restarts the VM)
+scripts/bench.sh          boot, network and disk benchmark (restarts the VM)
+scripts/bench-build-steps.py  per-step build times and extracted layers, for bench.sh
 ```
 
 ## Troubleshooting

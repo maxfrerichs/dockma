@@ -1,21 +1,52 @@
 #!/bin/sh
-# Boot and network benchmark against a real dockma VM. Restarts the VM RUNS
-# times, so it is not part of e2e. Usage: DOCKMA=<binary> RUNS=5 scripts/bench.sh
-# RUNS=0 skips the boot part and benchmarks the running VM's network only.
+# Boot, network and disk benchmark against a real dockma VM. Restarts the VM
+# RUNS times, so it is not part of e2e. Usage: DOCKMA=<binary> RUNS=5 scripts/bench.sh
+# RUNS=0 skips the boot part; NETWORK=0 skips the network part; DISK=1 adds the
+# disk part (fio, plus per-step build overhead on LAYER_BASE).
 # DOCKER_HOST is pinned to dockma's socket so another engine (Lima, Docker
-# Desktop) can't answer instead.
+# Desktop) can't answer instead. ENGINE_SOCKET=<path> points the network and
+# disk parts at another engine on purpose, for a baseline; boot and guest I/O
+# pressure are then skipped.
 set -eu
 
 DOCKMA=${DOCKMA:-dockma}
 DOCKMA_DIR=${DOCKMA_HOME:-$HOME/.dockma}
 RUNS=${RUNS:-5}
-export DOCKER_HOST="unix://$DOCKMA_DIR/docker.sock"
+NETWORK=${NETWORK:-1}
+DISK=${DISK:-0}
+LAYER_BASE=${LAYER_BASE:-ddev/ddev-webserver:v1.25.4}
+ENGINE_SOCKET=${ENGINE_SOCKET:-$DOCKMA_DIR/docker.sock}
+export DOCKER_HOST="unix://$ENGINE_SOCKET"
+IS_DOCKMA=0
+[ "$ENGINE_SOCKET" = "$DOCKMA_DIR/docker.sock" ] && IS_DOCKMA=1
+[ "$IS_DOCKMA" = 1 ] || RUNS=0
 PORT=18081
 IMAGE=dockma-bench
+HERE=$(cd "$(dirname "$0")" && pwd)
 step() { echo "--- $*"; }
 
-cleanup() { docker rm -f dockma-bench-iperf dockma-bench-http >/dev/null 2>&1 || true; }
+cleanup() {
+	docker rm -f dockma-bench-iperf dockma-bench-http >/dev/null 2>&1 || true
+	docker rmi dockma-bench-layers >/dev/null 2>&1 || true
+}
 trap cleanup EXIT
+
+# The guest's I/O pressure totals in microseconds, "some full"; empty off
+# dockma or when the shell can't read them, so a failed reading never ends
+# the benchmark.
+io_pressure() {
+	[ "$IS_DOCKMA" = 1 ] || return 0
+	{ "$DOCKMA" shell -T -- cat /proc/pressure/io 2>/dev/null || true; } |
+		sed -n 's/.*total=\([0-9]*\).*/\1/p' | tr '\n' ' '
+}
+
+# Prints the I/O stall between two io_pressure readings, or nothing unless
+# both readings hold two values.
+pressure_delta() {
+	set -- $1 $2
+	[ $# -eq 4 ] || return 0
+	echo "  guest I/O stall: some $((($3 - $1) / 1000)) ms, full $((($4 - $2) / 1000)) ms"
+}
 
 if [ "$RUNS" -gt 0 ]; then
 step "boot ($RUNS runs)"
@@ -105,11 +136,45 @@ row("CLI overhead", returned[-1] - ready[-1])
 PY
 fi
 
-step "network: bench image"
+step "bench image"
 docker build -q -t "$IMAGE" - >/dev/null <<'EOF'
 FROM alpine:3.24
-RUN apk add --no-cache iperf3 busybox-extras
+RUN apk add --no-cache iperf3 busybox-extras fio
 EOF
+
+if [ "$DISK" = 1 ]; then
+	step "disk: sequential write in a container (1 GiB, fsync at end)"
+	p0=$(io_pressure)
+	# Captured first: sh has no pipefail, so a failing fio would surface only
+	# as a JSON error from the parser.
+	out=$(docker run --rm "$IMAGE" fio --name=seq --directory=/tmp --rw=write --bs=1m --size=1g \
+		--end_fsync=1 --output-format=json)
+	echo "$out" | python3 -c 'import json, sys; w = json.load(sys.stdin)["jobs"][0]["write"]; print("  %.0f MB/s" % (w["bw_bytes"] / 1e6))'
+	pressure_delta "$p0" "$(io_pressure)"
+
+	step "disk: 4 KiB random writes, fsync after each (20 s)"
+	p0=$(io_pressure)
+	out=$(docker run --rm "$IMAGE" fio --name=sync --directory=/tmp --rw=randwrite --bs=4k --size=256m \
+		--fsync=1 --runtime=20 --time_based --output-format=json)
+	echo "$out" | python3 -c 'import json, sys; w = json.load(sys.stdin)["jobs"][0]["write"]; print("  %.0f IOPS" % w["iops"])'
+	pressure_delta "$p0" "$(io_pressure)"
+
+	step "disk: pull $LAYER_BASE"
+	start=$(date +%s)
+	docker pull -q "$LAYER_BASE" >/dev/null
+	echo "  $(($(date +%s) - start)) s (near 0 when already present)"
+
+	step "disk: build steps on $LAYER_BASE (--no-cache)"
+	p0=$(io_pressure)
+	start=$(date +%s)
+	printf 'FROM %s\nRUN true\nRUN true\nRUN cp -a /usr/lib /opt/lib-copy\nRUN true\n' "$LAYER_BASE" |
+		docker build --no-cache --progress=plain -t dockma-bench-layers - 2>&1 |
+		python3 "$HERE/bench-build-steps.py"
+	echo "  total $(($(date +%s) - start)) s"
+	pressure_delta "$p0" "$(io_pressure)"
+fi
+
+[ "$NETWORK" = 1 ] || exit 0
 
 step "network: container to container over the bridge (iperf3, 10 s)"
 docker run -d --name dockma-bench-iperf "$IMAGE" iperf3 -s >/dev/null

@@ -61,7 +61,9 @@ make guest                # build vm/out/{Image,initramfs.cpio.lz4} with any arm
 make install-guest        # copy guest artifacts to ~/.dockma/guest/
 make test                 # swift test (Swift Testing)
 make e2e                  # build + scripts/e2e.sh against a real VM (starts/restarts/stops the user's VM)
-scripts/bench.sh          # boot time with a phase breakdown, plus network throughput (restarts the user's VM RUNS times; RUNS=0 for network only)
+scripts/bench.sh          # boot time with a phase breakdown, plus network throughput (restarts the user's VM RUNS times; RUNS=0 skips boot, NETWORK=0 skips network)
+DISK=1 RUNS=0 NETWORK=0 scripts/bench.sh                                  # disk: fio and per-step build overhead on LAYER_BASE (steps parsed by scripts/bench-build-steps.py)
+ENGINE_SOCKET=$HOME/.lima/default/sock/docker.sock DISK=1 scripts/bench.sh   # same network/disk phases against another engine, as a baseline
 swift test --filter DockmaCoreTests.planIsEmptyWhenNothingChanged   # one test
 ```
 
