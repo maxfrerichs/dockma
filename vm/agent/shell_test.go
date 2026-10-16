@@ -150,3 +150,20 @@ func TestSessionWithTTY(t *testing.T) {
 		t.Fatalf("got %+v", res)
 	}
 }
+
+// A background job that keeps the terminal open (job control puts it in its
+// own process group, so the hangup on exit doesn't reach it) must not hold
+// the session open.
+func TestSessionWithTTYDoesNotWaitForBackgroundJob(t *testing.T) {
+	if _, err := os.Stat("/dev/ptmx"); err != nil {
+		t.Skip("no /dev/ptmx in this environment")
+	}
+	began := time.Now()
+	res := runSession(t, shellStart{Argv: []string{"sh", "-c", "set -m; sleep 30 & echo hi; exit 0"}, TTY: true})
+	if res.errMsg != "" {
+		t.Skipf("pty unavailable: %s", res.errMsg)
+	}
+	if elapsed := time.Since(began); elapsed > 2*time.Second || res.exit != 0 || !strings.Contains(res.stdout, "hi") {
+		t.Fatalf("after %v got %+v", elapsed, res)
+	}
+}

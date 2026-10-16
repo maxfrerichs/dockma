@@ -71,15 +71,22 @@ func encodeFrame(t byte, payload []byte) []byte {
 	return buf
 }
 
+var errSessionOver = errors.New("session is over")
+
 // frameWriter serializes frames from the output copiers and the session.
+// Nothing is written after the exit frame.
 type frameWriter struct {
-	mu sync.Mutex
-	w  io.Writer
+	mu   sync.Mutex
+	w    io.Writer
+	done bool
 }
 
 func (fw *frameWriter) write(t byte, payload []byte) error {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
+	if fw.done {
+		return errSessionOver
+	}
 	_, err := fw.w.Write(encodeFrame(t, payload))
 	return err
 }
@@ -87,7 +94,14 @@ func (fw *frameWriter) write(t byte, payload []byte) error {
 func (fw *frameWriter) exit(code int) error {
 	var p [4]byte
 	binary.BigEndian.PutUint32(p[:], uint32(int32(code)))
-	return fw.write(frameExit, p[:])
+	fw.mu.Lock()
+	defer fw.mu.Unlock()
+	if fw.done {
+		return errSessionOver
+	}
+	fw.done = true
+	_, err := fw.w.Write(encodeFrame(frameExit, p[:]))
+	return err
 }
 
 // copyFrames forwards r as frames of type t until EOF or error.
@@ -204,8 +218,14 @@ func handleShell(c net.Conn) {
 	for _, closer := range closers {
 		closer.Close()
 	}
-	<-drained
+	// Closing a pipe unblocks its copier, so wait for the last output. Not so
+	// for the pty: creack/pty's ioctls call File.Fd, which puts ptmx in
+	// blocking mode, and Close can't interrupt a blocked Read. Waiting would
+	// hold the session open for as long as a background job keeps the
+	// terminal (`sleep 600 &` then `exit`). The copier ends when the job
+	// closes the terminal; the writer drops its output after the exit frame.
 	if !start.TTY {
+		<-drained
 		stdin.Close()
 	}
 	fw.exit(exitCode(cmd, err))
