@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import dockma
+@testable import DockmaCore
 
 /// Reads until EOF; returns nil on timeout.
 private func readToEOF(_ fd: Int32) -> Data? {

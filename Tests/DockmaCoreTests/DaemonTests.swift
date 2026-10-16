@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import dockma
+@testable import DockmaCore
 
 @Test func secondDaemonLockFails() throws {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("dockma-test-\(UUID().uuidString).lock")

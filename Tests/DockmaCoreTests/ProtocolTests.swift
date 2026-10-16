@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import dockma
+@testable import DockmaCore
 
 /// The agent (vm/agent/main.go) emits these exact shapes.
 @Test func decodesAgentMessages() throws {

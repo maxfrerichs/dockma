@@ -1,5 +1,5 @@
 import Testing
-@testable import dockma
+@testable import DockmaCore
 
 @Test func planOpensNewAndClosesRemovedPorts() {
     let plan = PortForwarder.plan(

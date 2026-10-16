@@ -1,5 +1,5 @@
 import Testing
-@testable import dockma
+@testable import DockmaCore
 
 @Test func cmdlineCarriesHomeAndConsole() {
     let cmdline = KernelCmdline.build(home: "/Users/max")

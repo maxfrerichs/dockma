@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import dockma
+import DockmaCore
 
 @main
 struct Dockma: ParsableCommand {

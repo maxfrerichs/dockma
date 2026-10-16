@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import dockma
+@testable import DockmaCore
 
 @Test func configDecodesMissingKeysAsDefaults() throws {
     let config = try JSONDecoder().decode(Config.self, from: Data(#"{"cpus": 3}"#.utf8))

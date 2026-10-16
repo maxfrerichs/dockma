@@ -19,7 +19,7 @@ The vsock ports are defined in `VMConfigurationBuilder.Port` and duplicated in `
 | 1024 | Byte proxy to `/var/run/docker.sock`. The host serves it as `~/.dockma/docker.sock`. |
 | 1025 | JSON-lines control. `AgentMessage` (Swift) mirrors `message` (Go). Guest→host: `hello`, `ports`. Host→guest: `settime`, `shutdown`. |
 | 1026 | TCP tunnel. The first line is `tcp <host:port>`; raw bytes follow. |
-| 1027 | `dockma shell` sessions. Frames are `[type u8][len u32 BE][payload]`. The types are defined in `ShellFrame` (`Sources/dockma/ShellProtocol.swift`) and mirrored in `vm/agent/shell.go`; change both together. A golden `resize` byte sequence is asserted in both test suites. The host serves this port as `~/.dockma/shell.sock`, and the daemon only proxies bytes. |
+| 1027 | `dockma shell` sessions. Frames are `[type u8][len u32 BE][payload]`. The types are defined in `ShellFrame` (`Sources/DockmaCore/Shell/ShellProtocol.swift`) and mirrored in `vm/agent/shell.go`; change both together. A golden `resize` byte sequence is asserted in both test suites. The host serves this port as `~/.dockma/shell.sock`, and the daemon only proxies bytes. |
 
 The host CLI talks to the daemon over `~/.dockma/control.sock`: one JSON line in (`ControlRequest`), one line out (`DaemonStatus`).
 
@@ -27,16 +27,19 @@ The home directory is shared via virtiofs (tag `home`) and mounted in the guest 
 
 ## Source map
 
+The core library lives in `Sources/DockmaCore/`, grouped by area. Rows from Daemon lifecycle to Support give paths relative to it.
+
 | Area | Files |
 |---|---|
 | CLI commands | `Sources/DockmaCLI/Dockma.swift` — all subcommands, plus log tailing and following |
-| Daemon lifecycle | `Sources/dockma/Daemon.swift` — boot, signal handling, graceful stop, exit codes, time sync, log rotation |
-| VM | `Sources/dockma/VMConfigurationBuilder.swift` (devices, data disk), `VMHost.swift` (VZ wrapper, vsock connect) |
-| Forwarding | `Sources/dockma/Forwarding/` — `SocketListener` (unix/TCP accept via dispatch source), `SocketCopier` (bidirectional copy with half-close), `VsockSocketProxy` (unix socket → agent vsock port; docker and shell), `PortForwarder` (reconciles the agent's port set into listeners) |
-| Shell client | `ShellProtocol.swift` (frames, incremental decoder), `ShellSession.swift` (raw TTY, SIGWINCH, signal forwarding, stdin/output pumps) |
-| Agent link | `AgentClient.swift` (reconnecting control client), `AgentProtocol.swift` |
-| launchd and CLI↔daemon | `LaunchAgent.swift`, `ControlProtocol.swift` (also `UnixSocket`, `DockerPing`) |
-| Settings and paths | `Config.swift`, `Paths.swift`, `KernelCmdline.swift`, `Entitlements.swift` |
+| Daemon lifecycle | `Daemon/Daemon.swift` — boot, signal handling, graceful stop, exit codes, time sync, log rotation |
+| VM | `VM/VMConfigurationBuilder.swift` (devices, data disk), `VM/VMHost.swift` (VZ wrapper, vsock connect), `VM/KernelCmdline.swift`, `VM/Entitlements.swift` |
+| Forwarding | `Forwarding/` — `SocketListener` (unix/TCP accept via dispatch source), `SocketCopier` (bidirectional copy with half-close), `VsockSocketProxy` (unix socket → agent vsock port; docker and shell), `PortForwarder` (reconciles the agent's port set into listeners) |
+| Shell client | `Shell/ShellProtocol.swift` (frames, incremental decoder), `Shell/ShellSession.swift` (raw TTY, SIGWINCH, signal forwarding, stdin/output pumps) |
+| Agent link | `Agent/AgentClient.swift` (reconnecting control client), `Agent/AgentProtocol.swift` |
+| launchd and CLI↔daemon | `Daemon/LaunchAgent.swift`, `Daemon/ControlProtocol.swift` (also `UnixSocket`, `DockerPing`) |
+| Settings and paths | `Settings/Config.swift`, `Settings/Paths.swift` (also `DockmaError`) |
+| Support | `Support/Shell.swift` (subprocess runner, unrelated to `dockma shell`), `Support/LineIO.swift`, `Support/Log.swift`, `Support/DockerContext.swift` |
 | Guest build | `vm/Dockerfile`, `vm/kernel/dockma.config`, `vm/kernel/check-docker-config.sh` |
 | Guest boot | `vm/rootfs/init` (stage 0), `etc/inittab`, `etc/init.d/{rcS,dockerd,shutdown}`, `usr/libexec/dockma-disk` (data disk: format only when blank; tested by `vm/tests/dockma-disk-test.sh` in the guest build), `etc/docker/daemon.json`, `etc/profile` (shell prompt), `usr/share/udhcpc/default.script` |
 | Guest agent | `vm/agent/main.go` (servers, control, port watcher), `ports.go` (pure port extraction), `shell.go` (shell sessions on a pty via creack/pty or on pipes) |
@@ -50,7 +53,7 @@ make guest                # build vm/out/{Image,initramfs.cpio.zst} with any arm
 make install-guest        # copy guest artifacts to ~/.dockma/guest/
 make test                 # swift test (Swift Testing)
 make e2e                  # build + scripts/e2e.sh against a real VM (starts/restarts/stops the user's VM)
-swift test --filter dockmaTests.planIsEmptyWhenNothingChanged   # one test
+swift test --filter DockmaCoreTests.planIsEmptyWhenNothingChanged   # one test
 ```
 
 Agent tests run inside `make guest`, in the Dockerfile's `go vet` and `go test` step. To run them alone:
@@ -89,5 +92,5 @@ No linter or formatter is configured.
 - `swift-tools-version: 6.4`: Swift 6 language mode with strict concurrency. `platforms: [.macOS(.v14)]`.
 - Every target enables the `ApproachableConcurrency` upcoming feature. Add it to any new target.
 - Pure helpers on `@MainActor` types that tests call are marked `nonisolated`.
-- Tests use **Swift Testing** (`import Testing`, `@Test`, `#expect`) with `@testable import dockma`.
+- Tests use **Swift Testing** (`import Testing`, `@Test`, `#expect`) with `@testable import DockmaCore`.
 - Pinned guest versions are `ARG`s in `vm/Dockerfile`: kernel, Docker static bundle and moby's `check-config.sh` (each with sha256), Alpine, Go. Bumping `MOBY_VERSION` needs a new `CHECK_CONFIG_SHA256`.

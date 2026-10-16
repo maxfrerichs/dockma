@@ -14,7 +14,7 @@ let package = Package(
     targets: [
         // VM, forwarding, launchd and control logic; testable without the CLI.
         .target(
-            name: "dockma",
+            name: "DockmaCore",
             swiftSettings: [
                 .enableUpcomingFeature("ApproachableConcurrency"),
             ],
@@ -22,7 +22,7 @@ let package = Package(
         .executableTarget(
             name: "DockmaCLI",
             dependencies: [
-                "dockma",
+                "DockmaCore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             swiftSettings: [
@@ -30,8 +30,8 @@ let package = Package(
             ],
         ),
         .testTarget(
-            name: "dockmaTests",
-            dependencies: ["dockma"],
+            name: "DockmaCoreTests",
+            dependencies: ["DockmaCore"],
             swiftSettings: [
                 .enableUpcomingFeature("ApproachableConcurrency"),
             ],

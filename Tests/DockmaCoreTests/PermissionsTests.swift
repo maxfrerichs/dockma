@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import dockma
+@testable import DockmaCore
 
 private func mode(_ url: URL) throws -> Int {
     try #require(FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? NSNumber).intValue

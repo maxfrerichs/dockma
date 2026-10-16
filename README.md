@@ -237,9 +237,16 @@ To run the daemon in the foreground for debugging, stop the launchd job first (`
 
 ```
 Package.swift, Makefile, dockma.entitlements
-Sources/dockma/           core library: VM configuration, daemon, forwarding, launchd, control protocol
+Sources/DockmaCore/       core library, grouped by area:
+  VM/                     VM configuration, VZ wrapper, kernel cmdline, entitlement check
+  Daemon/                 daemon lifecycle, launchd job, CLI↔daemon control protocol
+  Agent/                  control link to dockma-agent
+  Forwarding/             socket listeners, byte copying, vsock proxies, port forwarding
+  Shell/                  `dockma shell` protocol and client session
+  Settings/               config.json and the state directory layout
+  Support/                logging, line I/O, subprocess runner, docker context
 Sources/DockmaCLI/        the `dockma` command (swift-argument-parser)
-Tests/dockmaTests/        unit tests
+Tests/DockmaCoreTests/    unit tests
 vm/Dockerfile             guest build (kernel, rootfs, initramfs)
 vm/kernel/                Kconfig fragment and Docker requirements gate
 vm/rootfs/                init scripts, inittab, dockerd config, DHCP hook
