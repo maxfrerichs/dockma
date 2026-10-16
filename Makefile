@@ -24,8 +24,10 @@ install: build
 	install -m 0755 $(BIN) $(PREFIX)/bin/dockma
 	@echo "installed $(PREFIX)/bin/dockma"
 
+# swift test relinks the dockma binary without the entitlement, like swift
+# build; re-sign it whether or not the tests pass.
 test:
-	swift test
+	swift test; status=$$?; codesign --force --sign - --entitlements dockma.entitlements $(BIN); exit $$status
 
 # Builds kernel + initramfs in a Linux container (any arm64 Docker works,
 # including dockma itself once it is running).

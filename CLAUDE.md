@@ -65,7 +65,7 @@ No linter or formatter is configured.
 
 ## Gotchas
 
-- **`swift build` strips the entitlement.** It relinks the binary unsigned. Without `com.apple.security.virtualization` the daemon can't start a VM, and `dockma start` refuses to run. Always use `make build` or `make install`.
+- **`swift build` and `swift test` strip the entitlement.** Both relink the binary unsigned (`make test` re-signs it afterwards). Without `com.apple.security.virtualization` the daemon can't start a VM, and `dockma start` refuses to run. Always use `make build` or `make install`.
 - **launchd runs the binary you started it with.** The plist's `ProgramArguments` is the absolute path of the binary that ran `dockma start`. A later unsigned `swift build` breaks the daemon on its next restart.
 - **Run e2e checks against dockma's socket explicitly.** This machine also runs Lima, and an exported `DOCKER_HOST` overrides docker contexts. Use `DOCKER_HOST=unix://$HOME/.dockma/docker.sock`, as `scripts/e2e.sh` does, or Lima may be the one answering.
 - **The daemon must run the main RunLoop, not `dispatchMain()`.** VZ objects and the `Daemon` are `@MainActor`. Under `dispatchMain()`, main-queue blocks run on a worker thread and Swift 6 isolation checks trap.
