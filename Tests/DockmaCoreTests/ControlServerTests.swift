@@ -9,10 +9,10 @@ private func makeSocketPath() -> String {
 
 /// Connects and waits off the main actor, which serves the replies.
 private func waitUntilReady(path: String, timeout: Duration) async throws -> ControlClient.WaitOutcome {
-    try await Task.detached {
+    try await runOnThread {
         let fd = try UnixSocket.connect(path: path, timeoutSeconds: 5)
         return try ControlClient.waitUntilReady(fd: fd, timeout: timeout)
-    }.value
+    }
 }
 
 private let status = DaemonStatus(

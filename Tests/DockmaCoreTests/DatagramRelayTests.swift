@@ -125,10 +125,12 @@ private func send(_ text: String, from client: Int32, to port: UInt16) {
 }
 
 /// The next datagram `client` receives; nil after the timeout.
-private func receive(on client: Int32) -> String? {
-    var buffer = [UInt8](repeating: 0, count: 2048)
-    let n = recv(client, &buffer, buffer.count, 0)
-    return n < 0 ? nil : String(decoding: buffer[0..<n], as: UTF8.self)
+private func receive(on client: Int32) async -> String? {
+    await runOnThread {
+        var buffer = [UInt8](repeating: 0, count: 2048)
+        let n = recv(client, &buffer, buffer.count, 0)
+        return n < 0 ? nil : String(decoding: buffer[0..<n], as: UTF8.self)
+    }
 }
 
 /// Polls `condition` for up to `timeout`.
@@ -149,8 +151,9 @@ private final class Counter: @unchecked Sendable {
     func increment() { lock.withLock { count += 1 } }
 }
 
-/// Serialized: the tests block on `recv` while the relay's connect tasks
-/// need the cooperative pool.
+/// Serialized so the relays' sockets and timers don't compete; `receive(on:)`
+/// blocks on its own thread because the relay's connect tasks need the
+/// cooperative pool.
 @Suite(.serialized) struct DatagramRelayTests {
     @Test func relayTunnelsEachClientAndKeepsDatagramsSentWhileConnecting() async throws {
         let agent = FakeAgent(connectDelay: .milliseconds(150))
@@ -165,11 +168,11 @@ private final class Counter: @unchecked Sendable {
         // Both arrive before the tunnel is up.
         send("a", from: first, to: port)
         send("b", from: first, to: port)
-        #expect(receive(on: first) == "echo:a")
-        #expect(receive(on: first) == "echo:b")
+        #expect(await receive(on: first) == "echo:a")
+        #expect(await receive(on: first) == "echo:b")
 
         send("c", from: second, to: port)
-        #expect(receive(on: second) == "echo:c")
+        #expect(await receive(on: second) == "echo:c")
         #expect(relay.flowCount == 2)
         #expect(agent.receivedHeaders == ["udp 127.0.0.1:53", "udp 127.0.0.1:53"])
     }
@@ -187,12 +190,12 @@ private final class Counter: @unchecked Sendable {
         defer { close(client) }
 
         send("x", from: client, to: port)
-        #expect(receive(on: client) == "echo:x")
+        #expect(await receive(on: client) == "echo:x")
         #expect(try await eventually { relay.flowCount == 0 && agent.closedConnections == 1 })
 
         // A later datagram starts a new flow.
         send("y", from: client, to: port)
-        #expect(receive(on: client) == "echo:y")
+        #expect(await receive(on: client) == "echo:y")
     }
 
     @Test func newClientAtTheLimitEndsTheLeastRecentlyActiveFlow() async throws {
@@ -208,20 +211,20 @@ private final class Counter: @unchecked Sendable {
         defer { close(first); close(second); close(third) }
 
         send("a", from: first, to: port)
-        #expect(receive(on: first) == "echo:a")
+        #expect(await receive(on: first) == "echo:a")
         send("b", from: second, to: port)
-        #expect(receive(on: second) == "echo:b")
+        #expect(await receive(on: second) == "echo:b")
         send("a2", from: first, to: port)  // now `second` is the least recently active
-        #expect(receive(on: first) == "echo:a2")
+        #expect(await receive(on: first) == "echo:a2")
 
         send("c", from: third, to: port)
-        #expect(receive(on: third) == "echo:c")
+        #expect(await receive(on: third) == "echo:c")
         #expect(relay.flowCount == 2)
         #expect(try await eventually { agent.closedConnections == 1 })
 
         // `first` kept its flow: no new tunnel header.
         send("a3", from: first, to: port)
-        #expect(receive(on: first) == "echo:a3")
+        #expect(await receive(on: first) == "echo:a3")
         #expect(agent.receivedHeaders.count == 3)
     }
 
@@ -234,7 +237,7 @@ private final class Counter: @unchecked Sendable {
         let client = makeClient()
         defer { close(client) }
         send("a", from: client, to: port)
-        #expect(receive(on: client) == "echo:a")
+        #expect(await receive(on: client) == "echo:a")
 
         relay.cancel()
         #expect(try await eventually { agent.closedConnections == 1 })
@@ -277,14 +280,14 @@ private final class Counter: @unchecked Sendable {
 
         let payloads = (0..<3).map { String(repeating: Character(String($0)), count: 40) }
         payloads.forEach { send($0, from: client, to: port) }
-        #expect(receive(on: client) == "echo:" + payloads[0])
-        #expect(receive(on: client) == "echo:" + payloads[1])
+        #expect(await receive(on: client) == "echo:" + payloads[0])
+        #expect(await receive(on: client) == "echo:" + payloads[1])
         #expect(try await eventually { relay.queuedByteCount == 0 })
 
         // The third was dropped, and written frames free the budget: the next
         // reply is for a later datagram.
         send("late", from: client, to: port)
-        #expect(receive(on: client) == "echo:late")
+        #expect(await receive(on: client) == "echo:late")
     }
 
     @Test func loopbackOnlyRelayDropsDatagramsFromOtherAddresses() async throws {
@@ -302,13 +305,13 @@ private final class Counter: @unchecked Sendable {
         let client = makeClient()
         defer { close(client) }
         send("a", from: client, to: port)
-        #expect(receive(on: client) == "echo:a")
+        #expect(await receive(on: client) == "echo:a")
         #expect(attempts.value == 1)
 
         guard let lan = nonLoopbackIPv4Address(), let remote = makeClient(boundTo: lan) else { return }  // no network interface up
         defer { close(remote) }
         send("b", from: remote, to: port)
-        #expect(receive(on: remote) == nil)
+        #expect(await receive(on: remote) == nil)
         #expect(attempts.value == 1)
         #expect(relay.flowCount == 1)
     }
