@@ -46,25 +46,65 @@ public struct Config: Codable, Equatable, Sendable {
         macAddress = try c.decodeIfPresent(String.self, forKey: .macAddress)
     }
 
+    /// Throws for a value the VM can't be built with. Messages name both the
+    /// config.json key and the `dockma config` flag that sets it, since the
+    /// daemon also validates a hand-edited file.
     public func validate() throws {
-        guard cpus >= 1 else { throw DockmaError("cpus must be at least 1") }
-        guard memoryMiB >= 512 else { throw DockmaError("memoryMiB must be at least 512") }
-        guard diskGiB >= 4 else { throw DockmaError("diskGiB must be at least 4") }
+        guard cpus >= 1 else { throw DockmaError("cpus (--cpus) must be at least 1") }
+        guard memoryMiB >= 512 else { throw DockmaError("memoryMiB (--memory) must be at least 512") }
+        guard diskGiB >= 4 else { throw DockmaError("diskGiB (--disk) must be at least 4") }
         // Upper bounds keep the byte sizes the VM is built with from overflowing.
-        guard memoryMiB <= UInt64.max >> 20 else { throw DockmaError("memoryMiB is too large: \(memoryMiB)") }
-        guard diskGiB <= 65536 else { throw DockmaError("diskGiB must be at most 65536 (64 TiB)") }
+        guard memoryMiB <= UInt64.max >> 20 else { throw DockmaError("memoryMiB (--memory) is too large: \(memoryMiB)") }
+        guard diskGiB <= 65536 else { throw DockmaError("diskGiB (--disk) must be at most 65536 (64 TiB)") }
         guard IPAddress(portBindAddress) != nil else {
-            throw DockmaError("portBindAddress must be an IPv4 or IPv6 address: \(portBindAddress)")
+            throw DockmaError("portBindAddress (--port-bind-address) must be an IPv4 or IPv6 address: \(portBindAddress)")
         }
     }
 
+    /// Settings that are valid but likely to hurt: more vCPUs than the Mac
+    /// has cores, or memory that leaves the Mac less than a quarter of its
+    /// own.
+    public func resourceWarnings(hostCPUs: Int, hostMemoryBytes: UInt64) -> [String] {
+        var warnings: [String] = []
+        if cpus > hostCPUs {
+            warnings.append("--cpus \(cpus) is more than this Mac's \(hostCPUs) cores")
+        }
+        let hostMiB = hostMemoryBytes >> 20
+        if memoryMiB > hostMiB / 4 * 3 {
+            warnings.append("--memory \(memoryMiB) MiB is more than 75% of this Mac's \(hostMiB) MiB")
+        }
+        return warnings
+    }
+
+    /// The settings in `url`, or the defaults if it doesn't exist. A file
+    /// that doesn't parse throws an error naming the offending key.
     public static func load(from url: URL) throws -> Config {
         guard FileManager.default.fileExists(atPath: url.path) else { return Config() }
         do {
             return try JSONDecoder().decode(Config.self, from: Data(contentsOf: url))
+        } catch let error as DecodingError {
+            throw DockmaError("\(url.path) is invalid: \(Self.describe(error)). Fix it, or delete it to go back to the defaults.")
         } catch {
-            throw DockmaError("cannot read \(url.path): \(error)")
+            throw DockmaError("cannot read \(url.path): \(error.localizedDescription)")
         }
+    }
+
+    /// A one-line description of a decoding error: the key path and what
+    /// was wrong there.
+    static func describe(_ error: DecodingError) -> String {
+        let context: DecodingError.Context
+        switch error {
+        case .typeMismatch(_, let c), .valueNotFound(_, let c), .keyNotFound(_, let c), .dataCorrupted(let c): context = c
+        @unknown default: return "\(error)"
+        }
+        let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+        var reason = context.debugDescription
+        // JSONSerialization's syntax errors are in the underlying error.
+        if let underlying = context.underlyingError as NSError?,
+           let detail = underlying.userInfo[NSDebugDescriptionErrorKey] as? String {
+            reason = detail
+        }
+        return path.isEmpty ? reason : "\(path): \(reason)"
     }
 
     public func save(to url: URL) throws {

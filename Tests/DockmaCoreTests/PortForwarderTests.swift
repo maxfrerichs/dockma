@@ -107,3 +107,51 @@ func loopbackAddresses(address: String, isLoopback: Bool) {
     #expect(IPAddress("::1")!.description == "::1")
     #expect(IPAddress("::ffff:127.0.0.1")!.description == "::ffff:127.0.0.1")
 }
+
+/// A listener on 127.0.0.1 at some free high port, which holds that port.
+@MainActor
+private func holdLoopbackPort() throws -> (listener: SocketListener, port: UInt16) {
+    for _ in 0..<50 {
+        let port = UInt16.random(in: 40000...60000)
+        if let listener = try? SocketListener.tcp(address: IPAddress("127.0.0.1")!, port: port, handler: { close($0) }) {
+            return (listener, port)
+        }
+    }
+    throw DockmaError("no free port")
+}
+
+@MainActor
+@Test func portHeldOnTheHostIsReportedAndForwardedOnceFree() throws {
+    let held = try holdLoopbackPort()
+    let forwarder = PortForwarder(bindAddress: "127.0.0.1") { throw DockmaError("no VM in this test") }
+    defer { forwarder.removeAll() }
+    forwarder.update([ForwardedPort(port: held.port, target: "127.0.0.1:80")])
+    #expect(forwarder.hasFailures)
+    let warning = try #require(forwarder.failureWarnings.first)
+    #expect(warning.hasPrefix("port \(held.port) is "))
+
+    // Still held: retrying changes nothing.
+    forwarder.retryFailed()
+    #expect(forwarder.hasFailures)
+
+    // The listener closes its socket asynchronously after cancel().
+    held.listener.cancel()
+    for _ in 0..<100 where forwarder.hasFailures {
+        Thread.sleep(forTimeInterval: 0.01)
+        forwarder.retryFailed()
+    }
+    #expect(forwarder.hasFailures == false)
+    #expect(forwarder.ports == [tcp(held.port)])
+}
+
+@MainActor
+@Test func removedPortIsNoLongerReportedAsFailed() throws {
+    let held = try holdLoopbackPort()
+    defer { held.listener.cancel() }
+    let forwarder = PortForwarder(bindAddress: "127.0.0.1") { throw DockmaError("no VM in this test") }
+    forwarder.update([ForwardedPort(port: held.port, target: "127.0.0.1:80")])
+    #expect(forwarder.hasFailures)
+    forwarder.update([])
+    #expect(forwarder.hasFailures == false)
+    #expect(forwarder.ports.isEmpty)
+}

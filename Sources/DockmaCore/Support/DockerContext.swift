@@ -33,6 +33,8 @@ public enum DockerContext {
             if current == host { return nil }
             return "DOCKER_HOST is set to \(current), which overrides docker contexts. Use: export DOCKER_HOST=\(host)"
         }
+        // The `dockma` context points at the default state directory only.
+        guard paths.isDefaultRoot else { return "Use this dockma with: export DOCKER_HOST=\(host)" }
         return "Use dockma with: docker context use \(name)   (or export DOCKER_HOST=\(host))"
     }
 }

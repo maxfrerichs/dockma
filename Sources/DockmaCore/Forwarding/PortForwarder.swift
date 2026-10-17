@@ -7,8 +7,10 @@ import Foundation
 public final class PortForwarder {
     private struct Forward {
         let target: String
-        let listeners: [SocketListener]
-        let relays: [DatagramRelay]
+        var listeners: [SocketListener] = []
+        var relays: [DatagramRelay] = []
+        /// The addresses that `listeners` or `relays` are bound to.
+        var boundAddresses: [ListenAddress] = []
 
         /// The listening addresses, for the log.
         var descriptions: [String] { listeners.map(\.description) + relays.map(\.description) }
@@ -20,17 +22,47 @@ public final class PortForwarder {
         }
     }
 
-    private let host: VMHost
+    /// A desired port that didn't bind on every address, with why.
+    private struct Failure {
+        let forward: ForwardedPort
+        let error: String
+        /// Whether it bound on some addresses, which keep serving.
+        let isPartial: Bool
+    }
+
+    private let connectTunnel: @Sendable () async throws -> Int32
     private let bindAddress: String
     private var forwards: [ForwardedPort.Key: Forward] = [:]
+    private var failures: [ForwardedPort.Key: Failure] = [:]
 
-    public init(host: VMHost, bindAddress: String) {
-        self.host = host
+    /// A forwarder that binds published ports on `bindAddress` and tunnels
+    /// them to the agent in `host`'s VM.
+    public convenience init(host: VMHost, bindAddress: String) {
+        self.init(bindAddress: bindAddress) { [host] in
+            try await host.connect(port: VMConfigurationBuilder.Port.tunnel)
+        }
+    }
+
+    /// A forwarder whose tunnels are descriptors from `connectTunnel`, each a
+    /// fresh connection to the agent's tunnel port.
+    init(bindAddress: String, connectTunnel: @escaping @Sendable () async throws -> Int32) {
         self.bindAddress = bindAddress
+        self.connectTunnel = connectTunnel
     }
 
     /// The forwarded ports, sorted by port and then transport.
     public var ports: [ForwardedPort.Key] { forwards.keys.sorted() }
+
+    /// Whether some desired port didn't bind on every address.
+    public var hasFailures: Bool { !failures.isEmpty }
+
+    /// One line per port that didn't bind on every address, sorted.
+    public var failureWarnings: [String] {
+        failures.keys.sorted().map { key in
+            let failure = failures[key]!
+            return "port \(key) is \(failure.isPartial ? "only partly forwarded" : "not forwarded"): \(failure.error)"
+        }
+    }
 
     /// The wildcard and loopback addresses also get their IPv6 counterpart, so
     /// `localhost` works whichever family a client tries first.
@@ -88,59 +120,85 @@ public final class PortForwarder {
 
     /// Opens and closes listeners so the forwarded ports match `desired`.
     public func update(_ desired: [ForwardedPort]) {
+        let wanted = Set(desired.map(\.key))
+        failures = failures.filter { wanted.contains($0.key) }
         let plan = Self.plan(current: forwards.mapValues(\.target), desired: desired)
         for key in plan.toClose {
             forwards.removeValue(forKey: key)?.cancel()
             Log.info("unforwarded port \(key)")
         }
         for forward in plan.toOpen {
-            let addresses = Self.listenAddresses(for: bindAddress, port: forward.port)
-            let listeners = forward.transport == .tcp ? addresses.compactMap { tcpListener(on: $0, for: forward) } : []
-            let relays = forward.transport == .udp ? addresses.compactMap { udpRelay(on: $0, for: forward) } : []
-            let opened = Forward(target: forward.target, listeners: listeners, relays: relays)
-            if opened.descriptions.isEmpty { continue }
-            forwards[forward.key] = opened
-            Log.info("forwarding \(opened.descriptions.joined(separator: ", ")) → \(forward.target)")
+            open(forward)
         }
+    }
+
+    /// Tries again to bind every port that didn't bind on all its addresses,
+    /// say because a Mac process held it and has since exited. A partly
+    /// forwarded port keeps the addresses it has and binds the missing ones.
+    public func retryFailed() {
+        for failure in failures.values.sorted(by: { $0.forward.key < $1.forward.key }) {
+            open(failure.forward)
+            if failures[failure.forward.key] == nil { Log.info("port \(failure.forward.key) is forwarded now") }
+        }
+    }
+
+    /// Binds `forward` on each listen address it isn't bound to yet, and
+    /// records it as failed when any bind fails.
+    private func open(_ forward: ForwardedPort) {
+        var opened = forwards[forward.key] ?? Forward(target: forward.target)
+        var errors: [String] = []
+        for address in Self.listenAddresses(for: bindAddress, port: forward.port) where !opened.boundAddresses.contains(address) {
+            do {
+                switch forward.transport {
+                case .tcp: opened.listeners.append(try tcpListener(on: address, for: forward))
+                case .udp: opened.relays.append(try udpRelay(on: address, for: forward))
+                }
+                opened.boundAddresses.append(address)
+            } catch {
+                errors.append("\(error)")
+            }
+        }
+        if errors.isEmpty {
+            failures[forward.key] = nil
+        } else {
+            let failure = Failure(forward: forward, error: errors.joined(separator: "; "), isPartial: !opened.descriptions.isEmpty)
+            // Log a failure once, not on every retry.
+            if failures[forward.key]?.error != failure.error {
+                Log.info("cannot forward port \(forward.key): \(failure.error)")
+            }
+            failures[forward.key] = failure
+        }
+        guard !opened.descriptions.isEmpty, opened.boundAddresses != forwards[forward.key]?.boundAddresses else { return }
+        forwards[forward.key] = opened
+        Log.info("forwarding \(opened.descriptions.joined(separator: ", ")) → \(forward.target)")
     }
 
     /// A TCP listener on `listen` that tunnels each connection to the
-    /// forward's target; nil, logged, if it can't bind.
-    private func tcpListener(on listen: ListenAddress, for forward: ForwardedPort) -> SocketListener? {
-        do {
-            return try SocketListener.tcp(address: listen.address, port: forward.port,
-                                          acceptsOnlyLoopback: listen.acceptsOnlyLoopback) { [host, target = forward.target] client in
-                Task { @MainActor in
-                    await Self.tunnel(client: client, target: target, host: host)
-                }
+    /// forward's target.
+    private func tcpListener(on listen: ListenAddress, for forward: ForwardedPort) throws -> SocketListener {
+        try SocketListener.tcp(address: listen.address, port: forward.port,
+                               acceptsOnlyLoopback: listen.acceptsOnlyLoopback) { [connectTunnel, target = forward.target] client in
+            Task {
+                await Self.tunnel(client: client, target: target, connect: connectTunnel)
             }
-        } catch {
-            Log.info("cannot forward port \(forward.key): \(error)")
-            return nil
         }
     }
 
-    /// A UDP relay on `listen` to the forward's target; nil, logged, if it
-    /// can't bind.
-    private func udpRelay(on listen: ListenAddress, for forward: ForwardedPort) -> DatagramRelay? {
-        do {
-            return try DatagramRelay(address: listen.address, port: forward.port, target: forward.target,
-                                     acceptsOnlyLoopback: listen.acceptsOnlyLoopback) { [host] in
-                try await host.connect(port: VMConfigurationBuilder.Port.tunnel)
-            }
-        } catch {
-            Log.info("cannot forward port \(forward.key): \(error)")
-            return nil
-        }
+    /// A UDP relay on `listen` to the forward's target.
+    private func udpRelay(on listen: ListenAddress, for forward: ForwardedPort) throws -> DatagramRelay {
+        try DatagramRelay(address: listen.address, port: forward.port, target: forward.target,
+                          acceptsOnlyLoopback: listen.acceptsOnlyLoopback, connect: connectTunnel)
     }
 
+    /// Closes every listener and relay and forgets failed ports.
     public func removeAll() {
         update([])
     }
 
-    private static func tunnel(client: Int32, target: String, host: VMHost) async {
+    /// Connects `client` to `target` in the guest through a fresh tunnel.
+    private nonisolated static func tunnel(client: Int32, target: String, connect: @Sendable () async throws -> Int32) async {
         do {
-            let guest = try await host.connect(port: VMConfigurationBuilder.Port.tunnel)
+            let guest = try await connect()
             guard writeAll(Data("tcp \(target)\n".utf8), to: guest) else {
                 close(guest)
                 close(client)

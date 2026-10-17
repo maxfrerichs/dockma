@@ -5,8 +5,13 @@ import Foundation
 @MainActor
 public final class Daemon {
     /// How long the guest gets to power off before the VM is stopped hard.
-    static let shutdownGrace: Duration = .seconds(20)
+    /// The deadlines must stay ordered: dockerd's own shutdown (15 s with
+    /// default container stop timeouts) < the guest shutdown script's wait
+    /// (20 s) < this < the plist's `ExitTimeOut` (30 s) < `bootout` (40 s).
+    static let shutdownGrace: Duration = .seconds(25)
     static let timeSyncInterval: Duration = .seconds(30)
+    /// How often ports that failed to bind are tried again.
+    static let portRetryInterval: Duration = .seconds(10)
 
     private let paths: Paths
     private var config = Config()
@@ -24,6 +29,9 @@ public final class Daemon {
     /// When `requestStop()` ran; the full grace period counts from here.
     private var stopRequestedAt: ContinuousClock.Instant?
     private var warnings: [String] = []
+    /// The CPU count and memory the VM got, after VZ's limits.
+    private var effectiveCPUs = 0
+    private var effectiveMemoryMiB: UInt64 = 0
     private var lockFD: Int32 = -1
     private let startedAt = Date()
 
@@ -93,6 +101,13 @@ public final class Daemon {
         let consoleLog = try Self.rotateAndOpen(paths.consoleLog)
         let dockerLog = try Self.rotateAndOpen(paths.dockerLog)
         let built = try VMConfigurationBuilder.build(config: config, paths: paths, consoleLog: consoleLog, dockerLog: dockerLog)
+        effectiveCPUs = built.configuration.cpuCount
+        effectiveMemoryMiB = built.configuration.memorySize >> 20
+        if effectiveCPUs != config.cpus || effectiveMemoryMiB != config.memoryMiB {
+            let warning = "the VM got \(effectiveCPUs) CPUs and \(effectiveMemoryMiB) MiB (configured: \(config.cpus) CPUs, \(config.memoryMiB) MiB), the limits of Virtualization.framework"
+            Log.info(warning)
+            warnings.append(warning)
+        }
         if let warning = built.rosettaWarning {
             Log.info(warning)
             warnings.append(warning)
@@ -132,7 +147,7 @@ public final class Daemon {
         // The agent dials the host as soon as it runs.
         try host.listen(onPort: VMConfigurationBuilder.Port.control) { fd in agent.accept(fd) }
 
-        Log.info("starting VM: \(config.cpus) CPUs, \(config.memoryMiB) MiB, home \(paths.home.path)")
+        Log.info("starting VM: \(effectiveCPUs) CPUs, \(effectiveMemoryMiB) MiB, home \(paths.home.path)")
         Task {
             do {
                 try await host.start()
@@ -167,6 +182,16 @@ public final class Daemon {
                 self.agent?.send(.setTime(Date()))
             }
         }
+
+        // A port held by a Mac process when the container started is
+        // forwarded once that process lets go of it.
+        Task { [weak self] in
+            while true {
+                try? await Task.sleep(for: Self.portRetryInterval)
+                guard let self, !self.stopRequested else { return }
+                if self.ports?.hasFailures == true { self.ports?.retryFailed() }
+            }
+        }
     }
 
     /// Answers a control request, at once or (for `wait`) once Docker is ready.
@@ -199,14 +224,15 @@ public final class Daemon {
             state: state,
             pid: getpid(),
             startedAt: startedAt,
-            cpus: config.cpus,
-            memoryMiB: config.memoryMiB,
+            cpus: effectiveCPUs,
+            memoryMiB: effectiveMemoryMiB,
             agentConnected: agent?.isConnected ?? false,
             agentVersion: agent?.version,
             guestKernel: agent?.kernel,
             forwardedPorts: ports?.ports.filter { $0.transport == .tcp }.map(\.port) ?? [],
             forwardedUDPPorts: ports?.ports.filter { $0.transport == .udp }.map(\.port) ?? [],
-            warnings: warnings)
+            warnings: warnings + (ports?.failureWarnings ?? []),
+            version: DockmaVersion.current)
         guard let data = try? JSONEncoder().encode(status) else { return reply.close() }
         reply.send(data)
     }
@@ -278,15 +304,22 @@ public final class Daemon {
         cleanUp()
         if let error {
             Log.info("VM stopped with error: \(error)")
-            exit(1)
-        }
-        if stopRequested {
+        } else if stopRequested {
             Log.info("VM stopped")
-            exit(0)
+        } else {
+            Log.info("guest powered off unexpectedly")
         }
-        // The guest powered off on its own; exit non-zero so launchd restarts.
-        Log.info("guest powered off unexpectedly")
-        exit(1)
+        exit(Self.exitCode(stopRequested: stopRequested))
+    }
+
+    /// The exit code after the VM stopped, which decides whether launchd
+    /// restarts the daemon (`KeepAlive.SuccessfulExit=false`): 0 after a
+    /// requested stop, even one that ended in a VM error, so `dockma stop`
+    /// never brings the VM back; 1 when the guest powered off or the VM
+    /// failed on its own. (A guest reboot, including one after a kernel
+    /// panic, doesn't stop the VM: VZ restarts it in place.)
+    nonisolated static func exitCode(stopRequested: Bool) -> Int32 {
+        stopRequested ? 0 : 1
     }
 
     private func closeForwarding() {
@@ -302,14 +335,22 @@ public final class Daemon {
         closeReadyWaiters()
     }
 
-    /// Keeps one previous log as `<name>.1` and opens a fresh file (mode 0600)
-    /// for writing.
+    /// How many previous logs `rotateAndOpen` keeps, as `<name>.1` (the
+    /// newest) to `<name>.3`. More than one, so a crash loop under launchd
+    /// doesn't rotate away the log of the first crash at once.
+    nonisolated static let keptLogGenerations = 3
+
+    /// Shifts the previous logs to `<name>.1` … `<name>.3`, dropping the
+    /// oldest, and opens a fresh file (mode 0600) for writing.
     nonisolated static func rotateAndOpen(_ url: URL) throws -> FileHandle {
         let fm = FileManager.default
-        let previous = url.appendingPathExtension("1")
+        func generation(_ n: Int) -> URL { url.appendingPathExtension(String(n)) }
         if fm.fileExists(atPath: url.path) {
-            try? fm.removeItem(at: previous)
-            try fm.moveItem(at: url, to: previous)
+            try? fm.removeItem(at: generation(keptLogGenerations))
+            for n in stride(from: keptLogGenerations - 1, through: 1, by: -1) where fm.fileExists(atPath: generation(n).path) {
+                try? fm.moveItem(at: generation(n), to: generation(n + 1))
+            }
+            try fm.moveItem(at: url, to: generation(1))
         }
         guard fm.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
             throw DockmaError("cannot create \(url.path)")

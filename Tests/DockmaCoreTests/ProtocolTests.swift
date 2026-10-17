@@ -54,12 +54,69 @@ import Testing
     let agent = LaunchAgent(paths: paths, executable: "/opt/dockma/bin/dockma")
     let data = try agent.plist(autostart: false)
     let plist = try #require(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
-    #expect(plist["Label"] as? String == LaunchAgent.label)
+    #expect(plist["Label"] as? String == "io.dockma.daemon")
     #expect(plist["ProgramArguments"] as? [String] == ["/opt/dockma/bin/dockma", "daemon"])
     #expect((plist["KeepAlive"] as? [String: Bool])?["SuccessfulExit"] == false)
     #expect(plist["StandardErrorPath"] as? String == "/Users/x/.dockma/logs/daemon.log")
-    #expect(agent.plistURL(autostart: true).path == "/Users/x/Library/LaunchAgents/\(LaunchAgent.label).plist")
-    #expect(agent.plistURL(autostart: false).path == "/Users/x/.dockma/\(LaunchAgent.label).plist")
+    #expect(agent.plistURL(autostart: true).path == "/Users/x/Library/LaunchAgents/io.dockma.daemon.plist")
+    #expect(agent.plistURL(autostart: false).path == "/Users/x/.dockma/io.dockma.daemon.plist")
+}
+
+@Test func launchAgentLabelIsPerStateDirectory() {
+    let home = URL(fileURLWithPath: "/Users/x")
+    let byDefault = Paths(root: home.appendingPathComponent(".dockma"), home: home)
+    let scratch = Paths(root: URL(fileURLWithPath: "/tmp/scratch"), home: home)
+    let other = Paths(root: URL(fileURLWithPath: "/tmp/other"), home: home)
+    #expect(LaunchAgent.label(for: byDefault) == "io.dockma.daemon")
+    // A trailing slash or `.` names the same directory.
+    #expect(LaunchAgent.label(for: Paths(root: URL(fileURLWithPath: "/Users/x/./.dockma/"), home: home)) == "io.dockma.daemon")
+    let label = LaunchAgent.label(for: scratch)
+    #expect(label.hasPrefix("io.dockma.daemon.") && label.count == "io.dockma.daemon.".count + 8)
+    #expect(label == LaunchAgent.label(for: scratch))
+    #expect(label != LaunchAgent.label(for: other))
+    let agent = LaunchAgent(paths: scratch, executable: "/x")
+    #expect(agent.plistURL(autostart: false).path == "/tmp/scratch/\(label).plist")
+}
+
+@Test func legacyPlistOwnershipFollowsDockmaHome() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("dockma-legacy-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let paths = Paths(root: root, home: URL(fileURLWithPath: "/Users/x"))
+    let agent = LaunchAgent(paths: paths, executable: "/x")
+    let url = root.appendingPathComponent("legacy.plist")
+    func write(_ environment: [String: String]) throws {
+        let dict: [String: Any] = ["Label": "io.dockma.daemon", "EnvironmentVariables": environment]
+        try PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0).write(to: url)
+    }
+    try write(["DOCKMA_HOME": root.path + "/"])
+    #expect(agent.isPlist(url, ownedBy: paths))
+    try write(["DOCKMA_HOME": "/elsewhere"])
+    #expect(agent.isPlist(url, ownedBy: paths) == false)
+    try write([:])  // the default state directory's job
+    #expect(agent.isPlist(url, ownedBy: paths) == false)
+}
+
+/// A stale plist that names this DOCKMA_HOME must not get the default
+/// instance's job booted out; only a job loaded from that plist may be.
+@Test func legacyJobIsBootedOutOnlyWhenLoadedFromAnOwnedPlist() {
+    let owned = [URL(fileURLWithPath: "/tmp/x/io.dockma.daemon.plist")]
+    let fromOwned = "gui/501/io.dockma.daemon = {\n\tpath = /tmp/x/io.dockma.daemon.plist\n\tpid = 42\n}"
+    let fromDefault = "gui/501/io.dockma.daemon = {\n\tpath = /Users/x/Library/LaunchAgents/io.dockma.daemon.plist\n\tpid = 42\n}"
+    #expect(LaunchAgent.isJob(launchctlPrint: fromOwned, loadedFromOneOf: owned))
+    #expect(LaunchAgent.isJob(launchctlPrint: fromDefault, loadedFromOneOf: owned) == false)
+    #expect(LaunchAgent.isJob(launchctlPrint: "\tpid = 42\n", loadedFromOneOf: owned) == false)
+}
+
+@Test func symlinkedStateDirectoryGetsTheSameLabel() throws {
+    let base = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("dockma-link-\(UUID().uuidString)")
+    let real = base.appendingPathComponent("real")
+    let link = base.appendingPathComponent("link")
+    try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: base) }
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+    let home = URL(fileURLWithPath: "/Users/x")
+    #expect(LaunchAgent.label(for: Paths(root: link, home: home)) == LaunchAgent.label(for: Paths(root: real, home: home)))
 }
 
 @Test func parsesPIDFromLaunchctlPrint() {
@@ -81,6 +138,8 @@ import Testing
     #expect(DockerContext.hint(paths: paths, environment: ["DOCKER_HOST": "unix:///Users/x/.dockma/docker.sock"]) == nil)
     #expect(DockerContext.hint(paths: paths, environment: ["DOCKER_HOST": "unix:///other.sock"])?.contains("overrides") == true)
     #expect(DockerContext.hint(paths: paths, environment: [:])?.contains("docker context use dockma") == true)
+    let scratch = Paths(root: URL(fileURLWithPath: "/Users/x/.dockma-e2e"), home: URL(fileURLWithPath: "/Users/x"))
+    #expect(DockerContext.hint(paths: scratch, environment: [:]) == "Use this dockma with: export DOCKER_HOST=unix:///Users/x/.dockma-e2e/docker.sock")
 }
 
 /// A daemon that predates UDP forwarding sends no `forwardedUDPPorts`.
@@ -88,6 +147,7 @@ import Testing
     let json = #"{"state":"running","pid":1,"startedAt":0,"cpus":2,"memoryMiB":1024,"agentConnected":true,"forwardedPorts":[8080],"warnings":[]}"#
     let status = try JSONDecoder().decode(DaemonStatus.self, from: Data(json.utf8))
     #expect(status.forwardedUDPPorts == nil)
+    #expect(status.version == nil)  // nor a version, before 0.4
     #expect(status.forwardedPortKeys == [ForwardedPort.Key(port: 8080, transport: .tcp)])
 
     var withUDP = status

@@ -25,3 +25,26 @@ import Testing
     try #require(getrlimit(RLIMIT_NOFILE, &limit) == 0)
     #expect(UInt64(limit.rlim_cur) == raised)
 }
+
+@Test func onlyARequestedStopExitsZero() {
+    // launchd restarts the daemon after a non-zero exit.
+    #expect(Daemon.exitCode(stopRequested: true) == 0)
+    #expect(Daemon.exitCode(stopRequested: false) == 1)
+}
+
+@Test func rotationKeepsThreePreviousLogs() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("dockma-logs-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let log = dir.appendingPathComponent("daemon.log")
+    for run in 1...5 {
+        let handle = try Daemon.rotateAndOpen(log)
+        try handle.write(contentsOf: Data("run \(run)".utf8))
+        try handle.close()
+    }
+    func contents(_ url: URL) -> String? { FileManager.default.contents(atPath: url.path).map { String(decoding: $0, as: UTF8.self) } }
+    #expect(contents(log) == "run 5")
+    #expect(contents(log.appendingPathExtension("1")) == "run 4")
+    #expect(contents(log.appendingPathExtension("3")) == "run 2")
+    #expect(contents(log.appendingPathExtension("4")) == nil)
+}

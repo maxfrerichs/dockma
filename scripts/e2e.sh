@@ -1,19 +1,48 @@
 #!/bin/sh
-# End-to-end check against a real dockma VM. Usage: DOCKMA=<signed binary> scripts/e2e.sh
-# DOCKER_HOST is pinned to dockma's socket so another engine (Lima, Docker
-# Desktop) can't answer instead.
+# End-to-end check against a real dockma VM.
+# Usage: DOCKMA=<signed binary> [DOCKMA_HOME=<state dir>] scripts/e2e.sh
+# Without DOCKMA_HOME it uses ~/.dockma-e2e, a VM of its own with its own
+# launchd job, so the user's VM in ~/.dockma keeps running. That VM still
+# mounts the real home directory read-write. DOCKER_HOST is pinned to the
+# VM's socket so another engine (Lima, Docker Desktop) can't answer instead.
 set -eu
 
 DOCKMA=${DOCKMA:-dockma}
-DOCKMA_DIR=${DOCKMA_HOME:-$HOME/.dockma}
+DOCKMA_HOME=${DOCKMA_HOME:-$HOME/.dockma-e2e}
+export DOCKMA_HOME
+DOCKMA_DIR=$DOCKMA_HOME
 export DOCKER_HOST="unix://$DOCKMA_DIR/docker.sock"
 PORT=18080
 UDP_PORT=18053
+HELD_PORT=18081
 fail() { echo "FAIL: $*" >&2; exit 1; }
 step() { echo "--- $*"; }
 
-cleanup() { docker rm -f dockma-e2e-nginx dockma-e2e-echo >/dev/null 2>&1 || true; }
+# The script restarts and stops the VM and writes its daemon.json, so it
+# refuses the user's own state directory unless asked.
+if [ "$(cd "$DOCKMA_DIR" 2>/dev/null && pwd -P)" = "$(cd "$HOME/.dockma" 2>/dev/null && pwd -P)" ] && [ "${E2E_FORCE:-}" != 1 ]; then
+	fail "DOCKMA_HOME is your own ~/.dockma; e2e restarts and stops that VM. Use another directory, or set E2E_FORCE=1"
+fi
+
+# A daemon.json that was there before the run is restored, not deleted.
+user_daemon_json=
+cleanup() {
+	docker rm -f dockma-e2e-nginx dockma-e2e-echo dockma-e2e-held dockma-e2e-dind >/dev/null 2>&1 || true
+	[ -z "${holder:-}" ] || kill "$holder" 2>/dev/null || true
+	if [ -n "$user_daemon_json" ]; then
+		mv "$user_daemon_json" "$DOCKMA_DIR/daemon.json"
+	elif [ -n "${wrote_daemon_json:-}" ]; then
+		rm -f "$DOCKMA_DIR/daemon.json"
+	fi
+}
 trap cleanup EXIT
+
+if [ ! -f "$DOCKMA_DIR/guest/guest-protocol" ] && [ "$DOCKMA_DIR" != "$HOME/.dockma" ]; then
+	[ -f "$HOME/.dockma/guest/guest-protocol" ] ||
+		fail "no guest in $DOCKMA_DIR/guest; run: make install-guest DOCKMA_HOME=$DOCKMA_DIR"
+	mkdir -p "$DOCKMA_DIR/guest"
+	cp "$HOME/.dockma/guest/Image" "$HOME/.dockma/guest/initramfs.cpio.lz4" "$HOME/.dockma/guest/guest-protocol" "$DOCKMA_DIR/guest/"
+fi
 
 step "start"
 "$DOCKMA" start >/dev/null
@@ -85,6 +114,90 @@ sleep 1
 # check the daemon's view too.
 "$DOCKMA" status | grep -q "$UDP_PORT/udp" && fail "status still lists $UDP_PORT/udp after container removal"
 echo_check udp 127.0.0.1 2 && fail "udp port still forwarded after container removal"
+
+step "a port held on the Mac is reported, then forwarded once free"
+python3 -I -c 'import socket, sys, time
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(); time.sleep(600)' "$HELD_PORT" &
+holder=$!
+sleep 0.5
+docker run -d --name dockma-e2e-held -p "$HELD_PORT:80" nginx:alpine >/dev/null
+ok=
+for _ in $(seq 1 20); do
+	"$DOCKMA" status | grep -q "port $HELD_PORT is" && ok=1 && break
+	sleep 0.25
+done
+[ -n "$ok" ] || fail "status does not report the held port $HELD_PORT"
+kill "$holder"
+holder=
+ok=
+for _ in $(seq 1 60); do
+	curl -sf -m 2 -o /dev/null "http://127.0.0.1:$HELD_PORT" && ok=1 && break
+	sleep 0.5
+done
+[ -n "$ok" ] || fail "port $HELD_PORT not forwarded after the Mac process let go of it"
+"$DOCKMA" status | grep -q "port $HELD_PORT is" && fail "status still reports port $HELD_PORT"
+docker rm -f dockma-e2e-held >/dev/null
+
+step "host.docker.internal resolves to the Mac, on the default bridge and other networks"
+gateway=$("$DOCKMA" shell -- cat /run/dockma/gateway)
+[ -n "$gateway" ] || fail "no gateway recorded in the guest"
+resolved=$(docker run --rm alpine sh -c 'nslookup host.docker.internal | awk "/^Address: / {print \$2}"')
+[ "$resolved" = "$gateway" ] || fail "host.docker.internal is '$resolved', want $gateway"
+docker network create dockma-e2e-net >/dev/null
+resolved=$(docker run --rm --network dockma-e2e-net alpine sh -c 'nslookup host.docker.internal | awk "/^Address: / {print \$2}"')
+docker network rm dockma-e2e-net >/dev/null
+[ "$resolved" = "$gateway" ] || fail "host.docker.internal on a user network is '$resolved', want $gateway"
+docker run --rm --add-host=hg:host-gateway alpine grep -q "${gateway}[[:space:]]*hg" /etc/hosts ||
+	fail "host-gateway is not the Mac"
+docker run --rm alpine nslookup example.com >/dev/null || fail "other names no longer resolve"
+# The forwarder sits behind a redirect, so port 53 stays free for containers.
+docker run --rm -p 53:53/udp -p 53:53/tcp alpine true || fail "publishing port 53 failed"
+docker run --rm --network host python:3-alpine python -c '
+import socket
+for kind in (socket.SOCK_DGRAM, socket.SOCK_STREAM):
+    socket.socket(socket.AF_INET, kind).bind(("0.0.0.0", 53))
+' || fail "binding port 53 with --network host failed"
+
+step "limits: open files, vm.max_map_count, /dev/net/tun"
+[ "$(docker run --rm alpine sh -c 'ulimit -n')" = 1048576 ] || fail "container ulimit -n"
+[ "$("$DOCKMA" shell -- cat /proc/sys/vm/max_map_count)" = 262144 ] || fail "vm.max_map_count"
+"$DOCKMA" shell -- test -c /dev/net/tun || fail "no /dev/net/tun"
+
+step "containers get log rotation by default"
+created=$(docker create alpine true)
+max_size=$(docker inspect --format '{{index .HostConfig.LogConfig.Config "max-size"}}' "$created")
+docker rm "$created" >/dev/null
+[ "$max_size" = 10m ] || fail "default log max-size is '$max_size', want 10m"
+
+step "vsock: containers can't reach the agent, even without seccomp"
+docker run --rm --security-opt seccomp=unconfined python:3-alpine python -c '
+import socket, sys
+# 1: vsock loopback, 3: the VM itself. Refused, reset or closed at once is
+# isolated; a connection the shell port keeps open is the agent answering.
+for cid in (1, 3):
+    s = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+    s.settimeout(3)
+    try:
+        s.connect((cid, 1027))
+        if s.recv(1) == b"":
+            continue
+    except TimeoutError:
+        sys.exit(f"CID {cid}: the agent accepted the connection and kept it")
+    except OSError:
+        continue
+    sys.exit(f"CID {cid}: the agent answered")
+' || fail "a container reached the agent's shell port"
+
+step "Docker-in-Docker starts its engine (iptables-nft in the inner dockerd)"
+docker run -d --privileged --name dockma-e2e-dind docker:dind >/dev/null
+ok=
+for _ in $(seq 1 60); do
+	docker exec dockma-e2e-dind docker info >/dev/null 2>&1 && ok=1 && break
+	sleep 1
+done
+[ -n "$ok" ] || { docker logs --tail 20 dockma-e2e-dind >&2; fail "dockerd in docker:dind did not start"; }
+docker rm -f dockma-e2e-dind >/dev/null
 
 step "amd64 image via Rosetta"
 [ "$(docker run --rm --platform linux/amd64 alpine uname -m)" = x86_64 ] || fail "amd64 container"
@@ -169,10 +282,19 @@ for s in conns:
     s.close()
 PY
 
-step "restart keeps data; registry pulls work afterwards"
+step "restart keeps data and applies daemon.json; registry pulls work afterwards"
 docker volume create dockma-e2e >/dev/null
 docker run --rm -v dockma-e2e:/data alpine sh -c 'echo persisted > /data/f'
+# A protected key is ignored; the rest applies.
+if [ -e "$DOCKMA_DIR/daemon.json" ]; then
+	user_daemon_json="$DOCKMA_DIR/daemon.json.e2e-saved"
+	mv "$DOCKMA_DIR/daemon.json" "$user_daemon_json"
+fi
+wrote_daemon_json=1
+printf '{"registry-mirrors": ["https://mirror.dockma-e2e.invalid"], "data-root": "/elsewhere"}\n' >"$DOCKMA_DIR/daemon.json"
 "$DOCKMA" restart >/dev/null
+docker info --format '{{.RegistryConfig.Mirrors}}' | grep -q 'mirror.dockma-e2e.invalid' || fail "daemon.json mirror not applied"
+[ "$(docker info --format '{{.DockerRootDir}}')" = /var/lib/docker ] || fail "daemon.json changed data-root"
 [ "$(docker run --rm -v dockma-e2e:/data alpine cat /data/f)" = persisted ] || fail "volume data lost across restart"
 docker volume rm dockma-e2e >/dev/null
 docker pull -q busybox >/dev/null || fail "registry pull over HTTPS"
@@ -180,7 +302,13 @@ docker pull -q busybox >/dev/null || fail "registry pull over HTTPS"
 step "stop"
 "$DOCKMA" stop >/dev/null
 "$DOCKMA" status | grep -q 'stopped' || fail "status after stop"
-launchctl print "gui/$(id -u)/io.dockma.daemon" >/dev/null 2>&1 && fail "launchd job still loaded"
+for plist in "$DOCKMA_DIR"/io.dockma.daemon*.plist "$HOME"/Library/LaunchAgents/io.dockma.daemon*.plist; do
+	[ -e "$plist" ] || continue
+	# Only this state directory's job; the user's own may well be running.
+	plutil -extract EnvironmentVariables.DOCKMA_HOME raw "$plist" 2>/dev/null | grep -qxF "$DOCKMA_HOME" || continue
+	label=$(plutil -extract Label raw "$plist")
+	launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1 && fail "launchd job $label still loaded"
+done
 tail -n 1 "$DOCKMA_DIR/logs/daemon.log" | grep -q 'VM stopped' || fail "last daemon log line is not a graceful stop"
 
 echo "all e2e checks passed"

@@ -59,3 +59,33 @@ func configRejectsInvalidValues(config: Config) {
         #expect(mac.split(separator: ":").count == 6)
     }
 }
+
+@Test func invalidConfigFileNamesTheKey() throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("dockma-config-\(UUID().uuidString).json")
+    defer { try? FileManager.default.removeItem(at: url) }
+    try Data(#"{"cpus": "four"}"#.utf8).write(to: url)
+    let error = try #require(throws: DockmaError.self) { try Config.load(from: url) }
+    #expect(error.description.contains("is invalid: cpus: "))
+    #expect(error.description.contains("delete it"))
+
+    try Data(#"{"cpus": 4,"#.utf8).write(to: url)
+    #expect(throws: DockmaError.self) { try Config.load(from: url) }
+}
+
+@Test func validationNamesTheFlag() {
+    let error = #expect(throws: DockmaError.self) { try Config(memoryMiB: 256).validate() }
+    #expect(error?.description.hasPrefix("memoryMiB (--memory) ") == true)
+}
+
+@Test func resourceWarningsCompareWithTheMac() {
+    let config = Config(cpus: 12, memoryMiB: 14 * 1024)
+    let warnings = config.resourceWarnings(hostCPUs: 10, hostMemoryBytes: 16 << 30)
+    #expect(warnings.count == 2)
+    #expect(Config(cpus: 4, memoryMiB: 4096).resourceWarnings(hostCPUs: 10, hostMemoryBytes: 16 << 30).isEmpty)
+}
+
+@Test func dataDiskCanGrowButNotShrink() throws {
+    try VMConfigurationBuilder.checkDataDiskResize(currentBytes: 64 << 30, toGiB: 64)
+    try VMConfigurationBuilder.checkDataDiskResize(currentBytes: 64 << 30, toGiB: 128)
+    #expect(throws: DockmaError.self) { try VMConfigurationBuilder.checkDataDiskResize(currentBytes: 64 << 30, toGiB: 32) }
+}

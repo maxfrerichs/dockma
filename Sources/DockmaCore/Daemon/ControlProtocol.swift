@@ -26,6 +26,8 @@ public struct DaemonStatus: Codable, Equatable, Sendable {
     /// Forwarded UDP ports; nil from a daemon that predates UDP forwarding.
     public var forwardedUDPPorts: [UInt16]? = nil
     public var warnings: [String]
+    /// The daemon's dockma version; nil from a daemon that predates it.
+    public var version: String? = nil
 
     /// Every forwarded port, sorted by port and then transport.
     public var forwardedPortKeys: [ForwardedPort.Key] {

@@ -74,6 +74,7 @@ struct Start: ParsableCommand {
 
         let style = TerminalStyle.standardOutput()
         let agent = LaunchAgent(paths: paths, executable: currentExecutable())
+        if try agent.migrateLegacyJob() { print("Stopped this DOCKMA_HOME's job that an older dockma started as \(LaunchAgent.defaultLabel).") }
         var job = agent.state()
         if job.isLoaded, job.pid != nil {
             if DockerPing.isResponding(socketPath: paths.dockerSocket.path) {
@@ -143,7 +144,8 @@ struct Start: ParsableCommand {
         progress?.finish()
         print(style.success("Docker engine is ready") + " " + style.dim("(\(TerminalText.seconds(.now - startedAt)))"))
         print("  Socket: \(paths.dockerSocket.path)")
-        if let note = DockerContext.ensure(paths: paths) { print("  " + note) }
+        // The `dockma` context belongs to the default state directory.
+        if paths.isDefaultRoot, let note = DockerContext.ensure(paths: paths) { print("  " + note) }
         if let hint = DockerContext.hint(paths: paths) { print("  " + hint) }
     }
 
@@ -229,6 +231,10 @@ struct Stop: ParsableCommand {
         let paths = Paths.default()
         let style = TerminalStyle.standardOutput()
         let agent = LaunchAgent(paths: paths, executable: currentExecutable())
+        if try agent.migrateLegacyJob() {
+            print(style.success("dockma stopped") + " (a job an older dockma started as \(LaunchAgent.defaultLabel))")
+            return
+        }
         if agent.state().isLoaded {
             let startedAt = ContinuousClock.now
             // Stopping doesn't rotate the logs; only new lines matter.
@@ -298,7 +304,10 @@ struct Status: ParsableCommand {
         print("agent:    \(agentState) \(style.dim(status.agentVersion ?? ""))")
         let ports = status.forwardedPortKeys
         print("ports:    \(ports.isEmpty ? style.dim("none") : ports.map(\.description).joined(separator: ", "))")
-        print("daemon:   pid \(status.pid)")
+        print("daemon:   pid \(status.pid) \(style.dim(status.version ?? ""))")
+        if status.version != DockmaVersion.current {
+            print("warning:  \(style.yellow("the daemon runs \(status.version.map { "dockma \($0)" } ?? "an older dockma"), this CLI is \(DockmaVersion.current); run `dockma restart` to switch"))")
+        }
         for warning in status.warnings { print("warning:  \(style.yellow(warning))") }
         if let hint = DockerContext.hint(paths: paths) { print(hint) }
     }
@@ -397,7 +406,7 @@ struct ConfigCommand: ParsableCommand {
     @Option(help: "Data disk size in GiB (can only grow).")
     var disk: UInt64?
 
-    @Option(help: "Host address published ports are bound to (127.0.0.1 or 0.0.0.0).")
+    @Option(help: "Host address published ports are bound to: 127.0.0.1 (this Mac only), 0.0.0.0 (all interfaces) or one interface's address.")
     var portBindAddress: String?
 
     @Option(help: "Run amd64 images with Rosetta (true/false).")
@@ -420,6 +429,16 @@ struct ConfigCommand: ParsableCommand {
         if let rosetta { config.rosetta = rosetta }
         if let autostart { config.autostart = autostart }
         try config.validate()
+        if config.diskGiB != before.diskGiB, let current = VMConfigurationBuilder.dataDiskSize(at: paths.dataDisk) {
+            try VMConfigurationBuilder.checkDataDiskResize(currentBytes: current, toGiB: config.diskGiB)
+        }
+        let errorStyle = TerminalStyle.standardError()
+        if config.cpus != before.cpus || config.memoryMiB != before.memoryMiB {
+            for warning in config.resourceWarnings(hostCPUs: ProcessInfo.processInfo.activeProcessorCount,
+                                                   hostMemoryBytes: ProcessInfo.processInfo.physicalMemory) {
+                printError(errorStyle.yellow("warning: ") + warning)
+            }
+        }
 
         if config != before {
             try config.save(to: paths.config)
@@ -463,6 +482,7 @@ struct Delete: ParsableCommand {
     func run() throws {
         let paths = Paths.default()
         let agent = LaunchAgent(paths: paths, executable: currentExecutable())
+        if try agent.migrateLegacyJob() { print("Stopped this DOCKMA_HOME's job that an older dockma started as \(LaunchAgent.defaultLabel).") }
         if agent.state().isLoaded || (try? ControlClient.status(paths: paths)) != nil {
             throw DockmaError("dockma is running; run `dockma stop` first")
         }
@@ -478,7 +498,7 @@ struct Delete: ParsableCommand {
             try fm.removeItem(at: url)
         }
         agent.removePlists()
-        DockerContext.remove()
+        if paths.isDefaultRoot { DockerContext.remove() }
         print(TerminalStyle.standardOutput().success("Deleted dockma's data disk, config and logs."))
         print("  The guest image in \(paths.guest.path) was kept.")
     }

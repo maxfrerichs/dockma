@@ -19,6 +19,19 @@ public struct Paths: Sendable {
         return Paths(root: root, home: home)
     }
 
+    /// Whether this is the default state directory (`~/.dockma`) rather than
+    /// one chosen with `DOCKMA_HOME`. Resolves symlinks, so not O(1).
+    public var isDefaultRoot: Bool {
+        canonicalRootPath == Paths(root: home.appendingPathComponent(".dockma"), home: home).canonicalRootPath
+    }
+
+    /// The state directory's path with `.`, `..` and symlinks resolved, so
+    /// `/tmp/x` and `/private/tmp/x` name one directory. Touches the file
+    /// system, so not O(1).
+    public var canonicalRootPath: String {
+        root.standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
     public var config: URL { root.appendingPathComponent("config.json") }
     public var dataDisk: URL { root.appendingPathComponent("data.img") }
     public var dockerSocket: URL { root.appendingPathComponent("docker.sock") }

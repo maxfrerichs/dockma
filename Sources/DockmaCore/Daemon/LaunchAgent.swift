@@ -1,24 +1,44 @@
+import CryptoKit
 import Foundation
 
 /// Manages the per-user launchd job that runs `dockma daemon`.
 public struct LaunchAgent: Sendable {
-    public static let label = "io.dockma.daemon"
+    /// The job label of the default state directory. A frozen name: launchd
+    /// and installed plists know the job by it.
+    public static let defaultLabel = "io.dockma.daemon"
 
     public let paths: Paths
     public let executable: String
+    /// The job's label, distinct per state directory.
+    public let label: String
 
     public init(paths: Paths, executable: String) {
+        self.init(paths: paths, executable: executable, label: Self.label(for: paths))
+    }
+
+    init(paths: Paths, executable: String, label: String) {
         self.paths = paths
         self.executable = executable
+        self.label = label
+    }
+
+    /// The label for the job of `paths`: the default label for `~/.dockma`,
+    /// and the default label plus a hash of the state directory otherwise, so
+    /// a `DOCKMA_HOME` instance never touches the default one's job.
+    public static func label(for paths: Paths) -> String {
+        guard !paths.isDefaultRoot else { return defaultLabel }
+        let digest = SHA256.hash(data: Data(paths.canonicalRootPath.utf8))
+        let hex = digest.prefix(4).map { String(format: "%02x", $0) }.joined()
+        return "\(defaultLabel).\(hex)"
     }
 
     /// With autostart the plist lives in ~/Library/LaunchAgents so launchd
     /// loads it at login; otherwise it stays in the state directory.
     public func plistURL(autostart: Bool) -> URL {
         if autostart {
-            return paths.home.appendingPathComponent("Library/LaunchAgents/\(Self.label).plist")
+            return paths.home.appendingPathComponent("Library/LaunchAgents/\(label).plist")
         }
-        return paths.root.appendingPathComponent("\(Self.label).plist")
+        return paths.root.appendingPathComponent("\(label).plist")
     }
 
     /// The daemon exits 0 after a requested shutdown and non-zero when the
@@ -29,7 +49,7 @@ public struct LaunchAgent: Sendable {
             environment["DOCKMA_HOME"] = custom
         }
         let dict: [String: Any] = [
-            "Label": Self.label,
+            "Label": label,
             "ProgramArguments": [executable, "daemon"],
             "RunAtLoad": true,
             "KeepAlive": ["SuccessfulExit": false],
@@ -44,7 +64,7 @@ public struct LaunchAgent: Sendable {
     }
 
     private var domain: String { "gui/\(getuid())" }
-    private var service: String { "\(domain)/\(Self.label)" }
+    private var service: String { "\(domain)/\(label)" }
 
     /// What launchd reports about the dockma job.
     public struct JobState: Equatable, Sendable {
@@ -61,13 +81,20 @@ public struct LaunchAgent: Sendable {
 
     /// What launchd reports about the job now. Spawns `launchctl`.
     public func state() -> JobState {
-        guard let result = try? Subprocess.run("/bin/launchctl", arguments: ["print", service]), result.status == 0 else {
-            return JobState(isLoaded: false, pid: nil)
-        }
+        guard let output = launchctlPrint() else { return JobState(isLoaded: false, pid: nil) }
         return JobState(
             isLoaded: true,
-            pid: Self.field("pid", launchctlPrint: result.stdout).flatMap { Int32($0) },
-            runCount: Self.field("runs", launchctlPrint: result.stdout).flatMap { Int($0) } ?? 0)
+            pid: Self.field("pid", launchctlPrint: output).flatMap { Int32($0) },
+            runCount: Self.field("runs", launchctlPrint: output).flatMap { Int($0) } ?? 0)
+    }
+
+    /// `launchctl print` output for the job, or nil if launchd doesn't know
+    /// it. Spawns `launchctl`.
+    func launchctlPrint() -> String? {
+        guard let result = try? Subprocess.run("/bin/launchctl", arguments: ["print", service]), result.status == 0 else {
+            return nil
+        }
+        return result.stdout
     }
 
     /// The pid in `launchctl print` output, if the job has a process.
@@ -125,6 +152,45 @@ public struct LaunchAgent: Sendable {
             }
             Thread.sleep(forTimeInterval: 0.02)
         }
+    }
+
+    /// Moves this `DOCKMA_HOME` off a job that an older dockma loaded for it
+    /// under the default label, before labels were per state directory. Its
+    /// plists are removed, and the loaded job is booted out only if launchd
+    /// loaded it from one of them: a stale plist alone never stops the
+    /// default state directory's VM. Returns whether a running job was
+    /// booted out. Does nothing for the default state directory.
+    @discardableResult
+    public func migrateLegacyJob() throws -> Bool {
+        guard label != Self.defaultLabel else { return false }
+        let legacy = LaunchAgent(paths: paths, executable: executable, label: Self.defaultLabel)
+        let owned = [true, false].map { legacy.plistURL(autostart: $0) }.filter { legacy.isPlist($0, ownedBy: paths) }
+        guard !owned.isEmpty else { return false }
+        var bootedOut = false
+        if let print = legacy.launchctlPrint(), Self.isJob(launchctlPrint: print, loadedFromOneOf: owned) {
+            try legacy.bootout()
+            bootedOut = true
+        }
+        for url in owned { try? FileManager.default.removeItem(at: url) }
+        return bootedOut
+    }
+
+    /// Whether `launchctl print` output shows a job loaded from one of
+    /// `plists`.
+    static func isJob(launchctlPrint output: String, loadedFromOneOf plists: [URL]) -> Bool {
+        guard let path = field("path", launchctlPrint: output) else { return false }
+        let loaded = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        return plists.contains { $0.resolvingSymlinksInPath().path == loaded }
+    }
+
+    /// Whether the plist at `url` runs the daemon of the state directory `paths`.
+    func isPlist(_ url: URL, ownedBy paths: Paths) -> Bool {
+        guard let data = FileManager.default.contents(atPath: url.path),
+              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        else { return false }
+        let environment = plist["EnvironmentVariables"] as? [String: String] ?? [:]
+        guard let custom = environment["DOCKMA_HOME"] else { return paths.isDefaultRoot }
+        return Paths(root: URL(fileURLWithPath: custom), home: paths.home).canonicalRootPath == paths.canonicalRootPath
     }
 
     public func removePlists() {

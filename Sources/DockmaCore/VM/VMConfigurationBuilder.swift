@@ -64,7 +64,7 @@ public enum VMConfigurationBuilder {
 
         let bootLoader = VZLinuxBootLoader(kernelURL: paths.kernel)
         bootLoader.initialRamdiskURL = paths.initrd
-        bootLoader.commandLine = KernelCmdline.build(home: paths.home.path)
+        bootLoader.commandLine = KernelCmdline.build(home: paths.home.path, state: paths.root.path)
 
         let vm = VZVirtualMachineConfiguration()
         vm.bootLoader = bootLoader
@@ -121,6 +121,20 @@ public enum VMConfigurationBuilder {
         return Output(configuration: vm, rosettaWarning: rosettaWarning)
     }
 
+    /// The data disk's size in bytes (not its allocated size), or nil if
+    /// there is none yet.
+    nonisolated public static func dataDiskSize(at url: URL) -> UInt64? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.uint64Value
+    }
+
+    /// Throws if a disk of `currentBytes` would have to shrink to be
+    /// `sizeGiB`, which ext4 and the image can't do in place.
+    nonisolated public static func checkDataDiskResize(currentBytes: UInt64, toGiB sizeGiB: UInt64) throws {
+        if currentBytes > sizeGiB << 30 {
+            throw DockmaError("the data disk is \(currentBytes >> 30) GiB; shrinking it to \(sizeGiB) GiB is not supported")
+        }
+    }
+
     /// Creates the sparse data disk, or grows it when `diskGiB` increased.
     /// The guest grows the ext4 filesystem with resize2fs on boot.
     /// The image is kept at mode 0600.
@@ -133,10 +147,8 @@ public enum VMConfigurationBuilder {
             }
         }
         try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-        let current = (try fm.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.uint64Value ?? 0
-        if current > size {
-            throw DockmaError("data disk is \(current >> 30) GiB; shrinking to \(sizeGiB) GiB is not supported")
-        }
+        let current = dataDiskSize(at: url) ?? 0
+        try checkDataDiskResize(currentBytes: current, toGiB: sizeGiB)
         if current < size {
             let handle = try FileHandle(forWritingTo: url)
             defer { try? handle.close() }

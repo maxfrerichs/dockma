@@ -6,7 +6,11 @@ CONFIGURATION ?= debug
 DOCKER ?= docker
 PREFIX ?= $(HOME)/.local
 BIN = $(shell swift build -c $(CONFIGURATION) --show-bin-path 2>/dev/null)/dockma
-GUEST_DIR := $(HOME)/.dockma/guest
+# The state directory `dockma` uses: DOCKMA_HOME, or ~/.dockma.
+STATE_DIR = $(or $(DOCKMA_HOME),$(HOME)/.dockma)
+GUEST_DIR = $(STATE_DIR)/guest
+# make e2e runs its own VM in this state directory, beside the user's.
+E2E_HOME ?= $(HOME)/.dockma-e2e
 # Extra `docker buildx build` flags for `make guest`; CI passes its build cache.
 BUILDX_FLAGS ?=
 
@@ -40,8 +44,10 @@ install-guest: vm/out/Image vm/out/initramfs.cpio.lz4 vm/out/guest-protocol
 	mkdir -p $(GUEST_DIR)
 	cp vm/out/Image vm/out/initramfs.cpio.lz4 vm/out/guest-protocol $(GUEST_DIR)/
 
+# The e2e VM needs a guest: `make install-guest DOCKMA_HOME=$(E2E_HOME)`
+# installs a fresh build, or the script copies the one in ~/.dockma/guest.
 e2e: build
-	DOCKMA=$(BIN) scripts/e2e.sh
+	DOCKMA=$(BIN) DOCKMA_HOME=$(E2E_HOME) scripts/e2e.sh
 
 # The website: scripts/site-prepare.py derives site/data/facts.json and the
 # command reference pages, then Hugo builds site/public.
