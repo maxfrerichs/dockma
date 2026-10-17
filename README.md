@@ -345,7 +345,6 @@ The workflows don't run `make e2e`: hosted macOS runners can't start a VM.
 - If the guest agent is unresponsive, `stop` hard-stops the VM after 2 s. Recent writes that ext4 hasn't flushed can be lost.
 - `dockma shell` depends on the guest agent. If the agent itself is dead, there is no way in short of `dockma restart`.
 - Not yet tested:
-  - growing the disk with `config --disk`;
   - `--autostart`;
   - `delete`;
   - home paths that contain spaces.
