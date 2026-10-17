@@ -4,6 +4,8 @@ All notable changes to dockma are recorded here. The format follows [Keep a Chan
 
 ## Unreleased
 
+## 0.2.0 – 2026-10-17
+
 ### Added
 - A project website in `site/` (Hugo). It shows the features, the quick start, a `dockma status` sample and the architecture, plus a command reference generated from the docc file. Pinned versions come from `vm/Dockerfile` via `scripts/site-prepare.py`. `make site` builds it, `make site-serve` previews it, and `.github/workflows/pages.yml` deploys it to GitHub Pages.
 - Release artifacts. Pushing a version tag drafts a GitHub release with the signed `dockma` binary (`dockma-<version>-macos-arm64.tar.gz`), the guest (`dockma-guest-<version>.tar.gz`, which unpacks into `~/.dockma/guest/`), `SHA256SUMS` and build provenance attestations. The README describes installing from a release.
@@ -11,7 +13,7 @@ All notable changes to dockma are recorded here. The format follows [Keep a Chan
 - `dockma --version` prints the version.
 
 ### Changed
-- `dockma --help` describes dockma as "Lightweight Docker on macOS", matching the README and the website.
+- `dockma --help` describes dockma as "Lightweight Docker on macOS", matching the website.
 
 ## 0.1.0 – 2026-10-17
 
