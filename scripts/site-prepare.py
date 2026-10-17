@@ -57,7 +57,12 @@ def write_reference(root: Path) -> None:
             "---\n\n"
         )
         (out / f"{name}.md").write_text(front + body.strip() + "\n")
-    (out / "_index.md").write_text('---\ntitle: "Command reference"\n---\n')
+    (out / "_index.md").write_text(
+        "---\n"
+        'title: "Command reference"\n'
+        'summary: "Every dockma command and flag: start, stop, shell, config, logs and more."\n'
+        "---\n"
+    )
 
 
 def main() -> None:

@@ -3,5 +3,6 @@
 <article>
   <h1>{{ .Title }}</h1>
   {{ .Content }}
+  <p class="note"><a href="{{ printf "https://github.com/%s/blob/main/README.md" site.Params.repo }}">Usage and configuration in the README →</a></p>
 </article>
 {{- end }}

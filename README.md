@@ -2,6 +2,8 @@
 
 Lightweight Docker on macOS, free and open source.
 
+Website and command reference: <https://dockma.dev>
+
 ## tl;dr
 
 dockma boots a minimal Linux VM with Apple's Virtualization.framework and runs the Docker Engine inside it. The macOS `docker` CLI talks to it through a Unix socket, and a launchd job keeps it running in the background. Your home directory is shared into the VM.

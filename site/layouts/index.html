@@ -4,8 +4,7 @@
 <header class="hero">
 {{ partial "whale.html" . }}
   <div>
-    <h1 class="wordmark">dockma</h1>
-    <p class="tagline">Lightweight Docker on macOS,<br>free and open source.</p>
+    <h1 class="hero-title"><span class="wordmark">dockma</span><span class="tagline">Lightweight Docker on macOS,<br>free and open source.</span></h1>
     <div class="actions">
       <a class="btn primary" href="{{ $gh }}">GitHub →</a>
       <a class="btn" href="#quick-start">Quick start ↓</a>
@@ -20,6 +19,12 @@
 <section aria-labelledby="what">
   <h2 id="what">tl;dr</h2>
   <p>dockma boots a minimal Linux VM with Apple's Virtualization.framework and runs the Docker Engine inside it. The macOS <code>docker</code> CLI talks to it through a Unix socket. A launchd job keeps it running in the background.</p>
+</section>
+
+<section aria-labelledby="why">
+  <h2 id="why">Docker on a Mac, without Docker Desktop</h2>
+  <p>dockma is a Docker <em>engine</em> for Apple Silicon Macs, an alternative to running the engine through Docker Desktop, Lima or Colima. You keep using the regular <code>docker</code> CLI; dockma only provides the engine behind it.</p>
+  <p>It is early and experimental: Apple Silicon only, and tested on macOS 27 so far. See the <a href="{{ $gh }}/blob/main/README.md#limitations">known limitations</a> before relying on it.</p>
 </section>
 
 <section aria-labelledby="features">
