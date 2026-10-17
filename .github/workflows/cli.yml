@@ -52,7 +52,24 @@ jobs:
           swift --version
           swift --version 2>&1 | grep -q 'Swift version 6\.4' || { echo "::error::Swift 6.4 required"; exit 1; }
       - name: Test
-        run: make test
+        # Normally done in under a minute. A hung run is sampled after 5
+        # minutes, so the log shows where it is stuck, and then fails.
+        run: |
+          make test &
+          pid=$!
+          for _ in $(seq 300); do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+          if kill -0 "$pid" 2>/dev/null; then
+            echo "::error::make test is still running after 5 minutes"
+            ps -o pid,ppid,stat,etime,command -p "$(pgrep -d, -f 'swift|xctest|Testing|dockma|curl|tar|sleep')" || true
+            for p in $(pgrep -f 'swiftpm-testing-helper|xctest|dockmaPackageTests'); do
+              echo "::group::open files of $p"; sudo lsof -p "$p" || true; echo "::endgroup::"
+              echo "::group::sample of $p"; sudo sample "$p" 3 -mayDie 2>&1 || true; echo "::endgroup::"
+            done
+            sudo pkill -P "$pid" || true
+            kill "$pid" || true
+            exit 1
+          fi
+          wait "$pid"
       - name: Build release binary
         run: make build CONFIGURATION=release
       - name: Check binary
