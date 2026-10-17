@@ -1,4 +1,4 @@
-baseURL = "https://maxfrerichs.github.io/dockma/"
+baseURL = "https://dockma.dev/"
 title = "dockma"
 locale = "en"
 disableKinds = ["taxonomy", "term", "RSS"]

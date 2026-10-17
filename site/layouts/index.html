@@ -22,17 +22,10 @@
     </div>
     <p class="install-note">Installs the latest release to <code>~/.local/bin</code>, checksum-verified. <a href="{{ $gh }}/blob/main/install.sh">Read the script</a> before you run it.</p>
 </section>
-<section aria-labelledby="what">
-  <h2 id="what">tl;dr</h2>
-  <p>dockma boots a minimal Linux VM with Apple's Virtualization.framework and runs a stripped-down Linux distribution with Docker Engine inside it. The macOS <code>docker</code> CLI communicates to the engine through a Unix socket. A launchd job keeps it running in the background.</p>
-</section>
-
 <section aria-labelledby="why">
   <h2 id="why">Docker on a Mac, without the hassle.</h2>
-  <p>dockma is a Docker <em>runtime</em> for Apple Silicon Macs, an alternative to running the engine through Docker Desktop, Colima or OrbStack. You keep using the <code>docker</code> CLI on your host; dockma only provides the engine behind it.</p>
-  <p>It is currently in early development : Apple Silicon only, and tested on macOS 27 so far. See the <a href="{{ $gh }}/blob/main/README.md#limitations">known limitations</a> before relying on it.</p>
-  <p>Feel free to install, daily-drive and report issues, but if you need a battle-tested, production-ready alternative, consider <a href="https://github.com/abiosoft/colima">Colima</a>.</p>
-
+  <p>dockma is a Docker <em>runtime</em> for Apple Silicon Macs, an alternative to running the engine through Docker Desktop, Colima or OrbStack. It boots a minimal Linux VM with Apple's Virtualization.framework and runs Docker Engine inside it. You keep using the <code>docker</code> CLI on your host: it talks to the engine through a Unix socket, and a launchd job keeps the VM running in the background.</p>
+  <p>It is in early development. Feel free to install it, daily-drive it and report issues, and read the <a href="{{ $gh }}/blob/main/README.md#limitations">known limitations</a> first. If you need a battle-tested, production-ready alternative, consider <a href="https://github.com/abiosoft/colima">Colima</a>.</p>
 </section>
 
 <section aria-labelledby="features">
@@ -47,6 +40,17 @@
     </div>
     {{- end }}
   </div>
+</section>
+
+<section aria-labelledby="vm">
+  <h2 id="vm">A VM built for one job</h2>
+  <p>The guest is not a general-purpose distribution. Everything in it exists to run Docker, and all of it is built from one Dockerfile.</p>
+  <ul class="facts">
+    <li><strong>Kernel:</strong> Linux {{ $facts.kernel }}, configured from <code>tinyconfig</code> with only what Docker needs. Everything is built in, with no modules.</li>
+    <li><strong>Userspace:</strong> a busybox initramfs with Docker {{ $facts.docker }}'s static binaries. Its init keeps two services running: <code>dockma-agent</code>, a Go service on vsock, and <code>dockerd</code>.</li>
+    <li><strong>Stateless root:</strong> the root filesystem is rebuilt on every boot. Only <code>/var/lib/docker</code> lives on the data disk.</li>
+    <li><strong>Verifiable:</strong> kernel and Docker downloads are pinned and sha256-checked. Release builds carry provenance attestations.</li>
+  </ul>
 </section>
 
 <section aria-labelledby="quick-start">
@@ -95,7 +99,7 @@
     </div>
     <p class="arch-mounts">virtiofs: $HOME, Rosetta · virtio-blk: /var/lib/docker</p>
   </div>
-  <p>A lightweight daemon owns the VM and pipes the Docker, shell and port connections to a Go agent in the guest over vsock. The guest image is built reproducibly from one Dockerfile with pinned versions; the kernel and Docker downloads are sha256-checked.</p>
+  <p>A lightweight daemon owns the VM and pipes the Docker, shell and port connections to a Go agent in the guest over vsock.</p>
   <p><a href="{{ $gh }}/blob/main/README.md#how-it-works">Full architecture →</a></p>
 </section>
 

@@ -62,7 +62,7 @@ dockma boots a minimal Linux VM with Apple's Virtualization.framework and runs t
 ### With the install script
 
 ```sh
-curl -fsSL https://maxfrerichs.github.io/dockma/install.sh | sh
+curl -fsSL https://dockma.dev/install.sh | sh
 dockma start
 docker context use dockma
 ```

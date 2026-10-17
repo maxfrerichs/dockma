@@ -1,7 +1,7 @@
 #!/bin/sh
 # Installs the dockma CLI from a GitHub release, then its Linux guest.
 #
-#   curl -fsSL https://maxfrerichs.github.io/dockma/install.sh | sh
+#   curl -fsSL https://dockma.dev/install.sh | sh
 #
 # Downloads dockma-<version>-macos-arm64.tar.gz, checks it against the
 # release's SHA256SUMS (and its build provenance attestation, when an

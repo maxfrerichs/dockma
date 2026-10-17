@@ -4,6 +4,9 @@ All notable changes to dockma are recorded here. The format follows [Keep a Chan
 
 ## Unreleased
 
+### Changed
+- The website lives at <https://dockma.dev>. The install command is `curl -fsSL https://dockma.dev/install.sh | sh`; the old `maxfrerichs.github.io/dockma/` address redirects there. The website lists the 0.4.0 features and describes the guest VM.
+
 ## 0.4.0 – 2026-10-17
 
 ### Added

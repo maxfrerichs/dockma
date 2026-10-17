@@ -192,3 +192,7 @@ footer p { color: var(--muted); margin: 0; }
 .arch-bus { display: flex; align-items: center; gap: 12px; margin: 14px 0; color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase; }
 .arch-bus::before, .arch-bus::after { content: ""; flex: 1; border-top: 2px solid var(--accent); }
 .arch-mounts { margin: 14px 0 0; color: var(--muted); font-size: 13px; }
+
+/* "A VM built for one job" list */
+.facts { margin: 16px 0 0; padding-left: 1.2em; }
+.facts li { margin: 8px 0; }
