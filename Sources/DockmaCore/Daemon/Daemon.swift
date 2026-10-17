@@ -204,7 +204,8 @@ public final class Daemon {
             agentConnected: agent?.isConnected ?? false,
             agentVersion: agent?.version,
             guestKernel: agent?.kernel,
-            forwardedPorts: ports?.ports ?? [],
+            forwardedPorts: ports?.ports.filter { $0.transport == .tcp }.map(\.port) ?? [],
+            forwardedUDPPorts: ports?.ports.filter { $0.transport == .udp }.map(\.port) ?? [],
             warnings: warnings)
         guard let data = try? JSONEncoder().encode(status) else { return reply.close() }
         reply.send(data)

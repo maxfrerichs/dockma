@@ -19,35 +19,54 @@ type ContainerPort struct {
 	Type        string `json:"Type"`
 }
 
-// ForwardedPort is a published TCP port the host should listen on. Target is
-// the guest address the agent dials for a tunnelled connection.
+// ForwardedPort is a published TCP or UDP port the host should listen on.
+// Target is the guest address the agent dials for a tunnelled connection.
 type ForwardedPort struct {
-	Port   int    `json:"port"`
-	Target string `json:"target"`
+	Port      int    `json:"port"`
+	Transport string `json:"transport"`
+	Target    string `json:"target"`
 }
 
-// PublishedPorts returns one entry per published TCP host port, sorted by
-// port. Wildcard bindings are dialled via loopback, where docker-proxy also
-// listens; an IPv4 target wins over IPv6 when both exist for a port.
+// portKey identifies a host port; TCP and UDP ports with the same number are
+// separate forwards.
+type portKey struct {
+	port      int
+	transport string
+}
+
+// PublishedPorts returns one entry per published TCP or UDP host port, sorted
+// by port and then transport. Other transports (sctp) are skipped. Wildcard
+// bindings are dialled via loopback, where docker-proxy also listens; an IPv4
+// target wins over IPv6 when both exist for a port.
 func PublishedPorts(containers []Container) []ForwardedPort {
-	byPort := map[int]string{}
+	byKey := map[portKey]string{}
 	for _, c := range containers {
 		for _, p := range c.Ports {
-			if p.Type != "tcp" || p.PublicPort == 0 {
+			if (p.Type != "tcp" && p.Type != "udp") || p.PublicPort == 0 {
 				continue
 			}
+			key := portKey{port: p.PublicPort, transport: p.Type}
 			host := dialHost(p.IP)
-			if existing, ok := byPort[p.PublicPort]; ok && isIPv4(existing) {
+			if existing, ok := byKey[key]; ok && isIPv4(existing) {
 				continue
 			}
-			byPort[p.PublicPort] = host
+			byKey[key] = host
 		}
 	}
-	ports := make([]ForwardedPort, 0, len(byPort))
-	for port, host := range byPort {
-		ports = append(ports, ForwardedPort{Port: port, Target: net.JoinHostPort(host, strconv.Itoa(port))})
+	ports := make([]ForwardedPort, 0, len(byKey))
+	for key, host := range byKey {
+		ports = append(ports, ForwardedPort{
+			Port:      key.port,
+			Transport: key.transport,
+			Target:    net.JoinHostPort(host, strconv.Itoa(key.port)),
+		})
 	}
-	sort.Slice(ports, func(i, j int) bool { return ports[i].Port < ports[j].Port })
+	sort.Slice(ports, func(i, j int) bool {
+		if ports[i].Port != ports[j].Port {
+			return ports[i].Port < ports[j].Port
+		}
+		return ports[i].Transport < ports[j].Transport
+	})
 	return ports
 }
 

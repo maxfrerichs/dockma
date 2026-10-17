@@ -16,7 +16,8 @@ private func makeGuest(protocol contents: String?) throws -> Paths {
 }
 
 @Test func guestImageNeedsMatchingProtocol() throws {
-    for (contents, isValid) in [(nil, false), ("1\n", false), ("3\n", false), ("junk", false), ("\(GuestImage.protocolVersion)\n", true)] {
+    let older = "\(GuestImage.protocolVersion - 1)\n", newer = "\(GuestImage.protocolVersion + 1)\n"
+    for (contents, isValid) in [(nil, false), ("1\n", false), (older, false), (newer, false), ("junk", false), ("\(GuestImage.protocolVersion)\n", true)] {
         let paths = try makeGuest(protocol: contents)
         defer { try? FileManager.default.removeItem(at: paths.root) }
         if isValid {

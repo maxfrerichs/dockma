@@ -18,7 +18,7 @@ public final class SocketListener: @unchecked Sendable {
         self.unixPath = unixPath
         source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .global())
         let spare = SpareDescriptor()
-        let filter = acceptsOnlyLoopback ? LoopbackFilter() : nil
+        let filter = acceptsOnlyLoopback ? LoopbackFilter(rejection: "closed a connection") : nil
         source.setEventHandler { [fd, spare, filter, description] in
             while true {
                 var peer = sockaddr_storage()
@@ -100,44 +100,7 @@ public final class SocketListener: @unchecked Sendable {
     /// wildcard bind stand in for a loopback one.
     public static func tcp(address: IPAddress, port: UInt16, acceptsOnlyLoopback: Bool = false,
                            handler: @escaping @Sendable (Int32) -> Void) throws -> SocketListener {
-        let fd: Int32
-        let rc: Int32
-        let description: String
-        var on: Int32 = 1
-        switch address {
-        case .v4(let a):
-            fd = socket(AF_INET, SOCK_STREAM, 0)
-            guard fd >= 0 else { throw DockmaError.posix("socket") }
-            setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, socklen_t(MemoryLayout<Int32>.size))
-            var addr = sockaddr_in()
-            addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-            addr.sin_family = sa_family_t(AF_INET)
-            addr.sin_port = port.bigEndian
-            addr.sin_addr = a
-            rc = withUnsafePointer(to: &addr) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
-            }
-            description = "\(address):\(port)"
-        case .v6(let a):
-            fd = socket(AF_INET6, SOCK_STREAM, 0)
-            guard fd >= 0 else { throw DockmaError.posix("socket") }
-            setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, socklen_t(MemoryLayout<Int32>.size))
-            setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &on, socklen_t(MemoryLayout<Int32>.size))
-            var addr = sockaddr_in6()
-            addr.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
-            addr.sin6_family = sa_family_t(AF_INET6)
-            addr.sin6_port = port.bigEndian
-            addr.sin6_addr = a
-            rc = withUnsafePointer(to: &addr) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in6>.size)) }
-            }
-            description = "[\(address)]:\(port)"
-        }
-        guard rc == 0 else {
-            let error = DockmaError.posix("bind \(description)")
-            close(fd)
-            throw error
-        }
+        let (fd, description) = try InetSocket.makeBound(type: SOCK_STREAM, address: address, port: port)
         return try finish(fd: fd, description: acceptsOnlyLoopback ? "\(description) (loopback only)" : description,
                           unixPath: nil, acceptsOnlyLoopback: acceptsOnlyLoopback, handler: handler)
     }
@@ -156,11 +119,67 @@ public final class SocketListener: @unchecked Sendable {
     }
 }
 
+/// An IPv4 or IPv6 socket bound to an address, shared by TCP listeners and
+/// UDP relays.
+enum InetSocket {
+    /// Creates a socket of `type` (`SOCK_STREAM` or `SOCK_DGRAM`) bound to
+    /// `address:port`, and returns it with a description such as
+    /// `127.0.0.1:80` or `[::1]:80`. IPv6 sockets are IPv6-only.
+    static func makeBound(type: Int32, address: IPAddress, port: UInt16) throws -> (fd: Int32, description: String) {
+        let fd: Int32
+        let rc: Int32
+        let description: String
+        var on: Int32 = 1
+        switch address {
+        case .v4(let a):
+            fd = socket(AF_INET, type, 0)
+            guard fd >= 0 else { throw DockmaError.posix("socket") }
+            setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, socklen_t(MemoryLayout<Int32>.size))
+            var addr = sockaddr_in()
+            addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+            addr.sin_family = sa_family_t(AF_INET)
+            addr.sin_port = port.bigEndian
+            addr.sin_addr = a
+            rc = withUnsafePointer(to: &addr) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+            }
+            description = "\(address):\(port)"
+        case .v6(let a):
+            fd = socket(AF_INET6, type, 0)
+            guard fd >= 0 else { throw DockmaError.posix("socket") }
+            setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, socklen_t(MemoryLayout<Int32>.size))
+            setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &on, socklen_t(MemoryLayout<Int32>.size))
+            var addr = sockaddr_in6()
+            addr.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
+            addr.sin6_family = sa_family_t(AF_INET6)
+            addr.sin6_port = port.bigEndian
+            addr.sin6_addr = a
+            rc = withUnsafePointer(to: &addr) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in6>.size)) }
+            }
+            description = "[\(address)]:\(port)"
+        }
+        guard rc == 0 else {
+            let error = DockmaError.posix("bind \(description)")
+            close(fd)
+            throw error
+        }
+        return (fd, description)
+    }
+}
+
 /// Admits only loopback peers, logging the first rejection on a listener so
 /// a port scan can't flood the log. Only one source's handlers use it, and
 /// dispatch never runs those concurrently.
-private final class LoopbackFilter: @unchecked Sendable {
+final class LoopbackFilter: @unchecked Sendable {
+    private let rejection: String
     private var hasLoggedRejection = false
+
+    /// Creates a filter whose log line starts with `rejection`, such as
+    /// "closed a connection".
+    init(rejection: String) {
+        self.rejection = rejection
+    }
 
     /// Whether `peer` is a loopback address; logs the first one that isn't.
     func admits(_ peer: sockaddr_storage, on description: String) -> Bool {
@@ -168,7 +187,7 @@ private final class LoopbackFilter: @unchecked Sendable {
         if address?.isLoopback == true { return true }
         if !hasLoggedRejection {
             hasLoggedRejection = true
-            Log.info("closed a connection from \(address.map(String.init(describing:)) ?? "an unknown peer") on \(description): "
+            Log.info("\(rejection) from \(address.map(String.init(describing:)) ?? "an unknown peer") on \(description): "
                 + "only loopback peers are admitted (further rejections are not logged)")
         }
         return false

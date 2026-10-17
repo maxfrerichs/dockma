@@ -21,8 +21,17 @@ public struct DaemonStatus: Codable, Equatable, Sendable {
     public var agentConnected: Bool
     public var agentVersion: String?
     public var guestKernel: String?
+    /// Forwarded TCP ports.
     public var forwardedPorts: [UInt16]
+    /// Forwarded UDP ports; nil from a daemon that predates UDP forwarding.
+    public var forwardedUDPPorts: [UInt16]? = nil
     public var warnings: [String]
+
+    /// Every forwarded port, sorted by port and then transport.
+    public var forwardedPortKeys: [ForwardedPort.Key] {
+        (forwardedPorts.map { ForwardedPort.Key(port: $0, transport: .tcp) }
+            + (forwardedUDPPorts ?? []).map { ForwardedPort.Key(port: $0, transport: .udp) }).sorted()
+    }
 }
 
 /// Talks to a running daemon. Every call fails fast when none is listening.

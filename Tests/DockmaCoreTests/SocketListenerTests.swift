@@ -28,7 +28,7 @@ private func loopbackAddress(port: UInt16) -> sockaddr_in {
 }
 
 /// The first non-loopback IPv4 address of an interface that is up, if any.
-private func nonLoopbackIPv4Address() -> in_addr? {
+func nonLoopbackIPv4Address() -> in_addr? {
     var list: UnsafeMutablePointer<ifaddrs>?
     guard getifaddrs(&list) == 0 else { return nil }
     defer { freeifaddrs(list) }

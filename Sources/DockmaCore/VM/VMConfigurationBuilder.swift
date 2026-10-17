@@ -6,7 +6,7 @@ public enum GuestImage {
     /// The host↔guest protocol this binary speaks. Mirrored by
     /// `vm/agent/protocol`; bump both on an incompatible change. Images
     /// without a protocol file are version 1.
-    public static let protocolVersion = 2
+    public static let protocolVersion = 3
 
     /// Throws when the guest image is missing or speaks another protocol.
     public static func validate(paths: Paths) throws {

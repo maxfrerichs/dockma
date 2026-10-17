@@ -259,7 +259,8 @@ struct Status: ParsableCommand {
         print("vm:       \(status.cpus) CPUs, \(status.memoryMiB) MiB, kernel \(status.guestKernel ?? "?")")
         let agentState = status.agentConnected ? style.green("connected") : style.red("disconnected")
         print("agent:    \(agentState) \(style.dim(status.agentVersion ?? ""))")
-        print("ports:    \(status.forwardedPorts.isEmpty ? style.dim("none") : status.forwardedPorts.map(String.init).joined(separator: ", "))")
+        let ports = status.forwardedPortKeys
+        print("ports:    \(ports.isEmpty ? style.dim("none") : ports.map(\.description).joined(separator: ", "))")
         print("daemon:   pid \(status.pid)")
         for warning in status.warnings { print("warning:  \(style.yellow(warning))") }
         if let hint = DockerContext.hint(paths: paths) { print(hint) }

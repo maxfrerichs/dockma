@@ -15,13 +15,14 @@ The macOS `docker` CLI communicate to dockerd through a Unix socket. Your home d
   - `$HOME` is mounted inside the VM at the identical path (for example `/Users/you`) via virtiofs.
   - So `docker run -v "$PWD:/src"` works from anywhere under your home directory.
 - **Published ports on localhost.**
-  - `docker run -p 8080:80 …` is reachable at `localhost:8080` (IPv4 and IPv6), with no manual forwarding.
+  - `docker run -p 8080:80 …` is reachable at `localhost:8080` (IPv4 and IPv6), with no manual forwarding. UDP works the same way: `-p 1053:53/udp` answers on `localhost:1053`.
+  - Each UDP client gets its own tunnel and source port in the VM. It ends about 90 s after its last packet in either direction, matching docker-proxy.
   - The listener goes away when the container stops.
-  - Ports below 1024, such as DDEV's router on 80 and 443, work too. macOS lets a non-root process bind them only on the wildcard address, so with the default `127.0.0.1` the daemon listens on `0.0.0.0` and `::` and closes any connection that isn't from a loopback address.
-    - Other machines can't use the port, but a port scan from the network sees it as open, because the TCP handshake completes before the close.
+  - Ports below 1024, such as DDEV's router on 80 and 443, work too. macOS lets a non-root process bind them only on the wildcard address, so with the default `127.0.0.1` the daemon listens on `0.0.0.0` and `::` and closes any connection that isn't from a loopback address. UDP ports do the same and drop datagrams from non-loopback senders.
+    - Other machines can't use the port, but a port scan from the network sees a TCP port as open, because the TCP handshake completes before the close. A UDP port looks `open|filtered`.
     - Anything else listening on `*:80` conflicts with it.
     - A process running as root that holds `127.0.0.1:80` itself takes precedence: dockma's listener starts without error but receives none of that traffic.
-    - The daemon logs the first connection it closes on each listener, so `dockma logs --daemon` shows why a remote client was reset.
+    - The daemon logs the first connection it closes, or datagram it drops, on each listener, so `dockma logs --daemon` shows why a remote client got no answer.
     - macOS may ask whether `dockma` may accept incoming connections. The listener stays loopback-only whatever you answer.
 - **Run amd64 images via Rosetta.**
   - `docker run --platform linux/amd64 …` runs x86-64 images through Rosetta for Linux.
@@ -182,7 +183,7 @@ dockma shell ► ~/.dockma/shell.sock  │                        │
               ├─ unix socket → vsock 1024 ───────────────────►├─► /var/run/docker.sock
               ├─ control      ◄─ vsock 1025 (JSON lines) ─────┤◄─ dialled by the agent: Docker ready,
               │                                               │   ports, time sync, shutdown
-              ├─ 127.0.0.1:P  → vsock 1026 (TCP tunnel) ─────►├─► 127.0.0.1:P (docker-proxy)
+              ├─ 127.0.0.1:P  → vsock 1026 (TCP/UDP tunnel) ─►├─► 127.0.0.1:P (docker-proxy)
               └─ shell.sock   → vsock 1027 (shell frames) ───►└─► /bin/sh on a pty or pipes
 
   virtio-console hvc0/hvc1 → logs/console.log, logs/docker.log
@@ -213,8 +214,8 @@ dockma shell ► ~/.dockma/shell.sock  │                        │
 - **`dockma-agent`** (Go):
   - proxies vsock to the Docker socket;
   - dials the host's control port and reports when dockerd's API starts or stops answering. While dockerd is down it waits on inotify for the socket to appear rather than retrying;
-  - watches the Docker events API for published TCP ports and reports them to the host;
-  - dials tunnelled connections inside the VM;
+  - watches the Docker events API for published TCP and UDP ports and reports them to the host;
+  - dials tunnelled connections inside the VM. A UDP flow arrives as length-prefixed datagrams on one vsock connection per client;
   - runs `dockma shell` sessions. Each session uses a small framed protocol (start, stdin, resize, signal, started, stdout, stderr, exit, window) and runs on a pty or on pipes. `window` frames grant stdin credit, so a signal is never stuck behind stdin the command doesn't read;
   - steps the guest clock to host time every 30 s, which fixes drift after the Mac sleeps.
 
@@ -281,11 +282,13 @@ scripts/bench-build-steps.py  per-step build times and extracted layers, for ben
 - **A guest image is missing.** Run `make guest install-guest`.
 - **`docker` talks to a different engine.** Check `echo $DOCKER_HOST` and `docker context show`.
 - **dockerd doesn't start and `dockma logs` says the data disk is not mounted.** The guest refuses to format a disk that holds data. `dockma shell` still works: run `dockma shell -- e2fsck -fy /dev/vda`, which can recover a damaged superblock from a backup copy, then `dockma restart`.
-- **A published port isn't forwarded.** Run `dockma logs --daemon`. If the host port is already in use, the daemon logs `cannot forward port …`.
+- **A published port isn't forwarded.** Run `dockma logs --daemon`. If the host port is already in use, the daemon logs `cannot forward port …`. macOS itself holds some UDP ports, such as 5353 (mDNS), so publish those on another host port.
 
 ## Limitations
 
-- Only TCP ports are forwarded; UDP is not.
+- SCTP ports aren't forwarded.
+- With `--port-bind-address 0.0.0.0` on a Mac with several addresses, a UDP reply can leave from a different address than the one the client sent to. Clients that check the reply's source may ignore it. TCP is unaffected.
+- A UDP port tracks at most 256 clients; a new client beyond that ends the least recently active one. Datagrams beyond 16 MiB waiting for the VM are dropped.
 - The guest root filesystem lives in RAM (about 163 MB). A read-only erofs root would avoid that.
 - The memory balloon device is attached, but nothing reclaims memory from the guest yet.
 - If the guest agent is unresponsive, `stop` hard-stops the VM after 2 s. Recent writes that ext4 hasn't flushed can be lost.

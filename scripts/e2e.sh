@@ -8,10 +8,11 @@ DOCKMA=${DOCKMA:-dockma}
 DOCKMA_DIR=${DOCKMA_HOME:-$HOME/.dockma}
 export DOCKER_HOST="unix://$DOCKMA_DIR/docker.sock"
 PORT=18080
+UDP_PORT=18053
 fail() { echo "FAIL: $*" >&2; exit 1; }
 step() { echo "--- $*"; }
 
-cleanup() { docker rm -f dockma-e2e-nginx >/dev/null 2>&1 || true; }
+cleanup() { docker rm -f dockma-e2e-nginx dockma-e2e-echo >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 step "start"
@@ -44,6 +45,46 @@ done
 docker rm -f dockma-e2e-nginx >/dev/null
 sleep 1
 curl -sf -m 2 -o /dev/null "http://127.0.0.1:$PORT" && fail "port still forwarded after container removal"
+
+step "published UDP port forwarded to localhost, alongside TCP on the same port"
+docker run -d --name dockma-e2e-echo -p "$UDP_PORT:9999/udp" -p "$UDP_PORT:9999/tcp" --entrypoint sh alpine/socat -c \
+	'socat TCP-LISTEN:9999,fork,reuseaddr EXEC:cat & exec socat UDP-LISTEN:9999,fork,reuseaddr EXEC:cat' >/dev/null
+# echo_check <udp|tcp> <host> <tries>: succeeds once a message comes back.
+echo_check() {
+	python3 -I - "$@" <<'PY'
+import os, socket, sys, time
+kind, host, tries = sys.argv[1], sys.argv[2], int(sys.argv[3])
+port = int(os.environ["UDP_PORT"])
+family = socket.AF_INET6 if ":" in host else socket.AF_INET
+for _ in range(tries):
+    try:
+        if kind == "udp":
+            s = socket.socket(family, socket.SOCK_DGRAM)
+            s.settimeout(0.5)
+            s.sendto(b"ping", (host, port))
+            reply = s.recv(64)
+        else:
+            s = socket.create_connection((host, port), timeout=0.5)
+            s.sendall(b"ping")
+            reply = s.recv(64)
+        if reply == b"ping":
+            sys.exit(0)
+    except OSError:
+        time.sleep(0.25)
+sys.exit(1)
+PY
+}
+export UDP_PORT
+echo_check udp 127.0.0.1 40 || fail "udp 127.0.0.1:$UDP_PORT not answering"
+echo_check udp ::1 4 || fail "udp [::1]:$UDP_PORT not answering"
+echo_check tcp 127.0.0.1 4 || fail "tcp 127.0.0.1:$UDP_PORT not answering next to udp"
+"$DOCKMA" status | grep -q "$UDP_PORT/udp" || fail "status does not list $UDP_PORT/udp"
+docker rm -f dockma-e2e-echo >/dev/null
+sleep 1
+# A leaked relay looks like a closed port (the agent's send is refused), so
+# check the daemon's view too.
+"$DOCKMA" status | grep -q "$UDP_PORT/udp" && fail "status still lists $UDP_PORT/udp after container removal"
+echo_check udp 127.0.0.1 2 && fail "udp port still forwarded after container removal"
 
 step "amd64 image via Rosetta"
 [ "$(docker run --rm --platform linux/amd64 alpine uname -m)" = x86_64 ] || fail "amd64 container"

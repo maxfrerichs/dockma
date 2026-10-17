@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 dockma runs Docker on macOS inside a minimal Linux VM booted with Virtualization.framework. User-facing documentation lives in `README.md`: usage, configuration, the state directory and the architecture diagram. Keep the README in sync when you change CLI flags, defaults, files under `~/.dockma`, or pinned versions.
 
+`CHANGELOG.md` records every user-visible change: features, fixes, changed defaults, and anything that needs a guest rebuild or breaks compatibility (a `GuestImage.protocolVersion` bump always does). Add entries under `## Unreleased` in the same change that makes them. A release moves those entries under a new `## <version> – <date>` heading and gets an annotated git tag of the same name, without a `v` prefix (`0.1.0`). Before 1.0, a new feature or an incompatible host↔guest change bumps the minor version; fixes bump the patch.
+
 `Sources/DockmaCLI/DockmaCLI.docc/dockma.md` is generated from the ArgumentParser definitions. Regenerate it when commands, flags, abstracts or help text change: `swift package --allow-writing-to-package-directory generate-docc-reference`. The plugin rebuilds the release binary unsigned, and `make install` re-signs it.
 
 The project has two halves:
@@ -20,7 +22,7 @@ The vsock ports are defined in `VMConfigurationBuilder.Port` and duplicated in `
 |------|---------|
 | 1024 | Byte proxy to `/var/run/docker.sock`. The host serves it as `~/.dockma/docker.sock`. |
 | 1025 | JSON-lines control. **The host listens and the agent dials** (`VMHost.listen(onPort:accept:)`, installed before the VM starts). `AgentMessage` (Swift) mirrors `message` (Go). Guest→host: `hello`, `docker` (`ready`: whether dockerd's API answers), `ports`. Host→guest: `settime`, `shutdown`. |
-| 1026 | TCP tunnel. The first line is `tcp <host:port>`; raw bytes follow. |
+| 1026 | TCP and UDP tunnels. The first line is `tcp <host:port>` or `udp <host:port>`. For TCP, raw bytes follow. For UDP, one connection carries one client's flow as `[len u16 BE][payload]` frames both ways: `DatagramFrame` (Swift) mirrors `writeDatagram`/`readDatagram` in `vm/agent/udp.go`, and both test suites assert the same golden bytes. The host expires an idle flow after 90 s (docker-proxy's UDP timeout, checked every 5 s) by closing the connection; the agent's 180 s deadline is only a backstop. |
 | 1027 | `dockma shell` sessions. Frames are `[type u8][len u32 BE][payload]`. The types are defined in `ShellFrame` (`Sources/DockmaCore/Shell/ShellProtocol.swift`) and mirrored in `vm/agent/shell.go`; change both together. Golden `resize` and `window` byte sequences are asserted in both test suites. The host serves this port as `~/.dockma/shell.sock`, and the daemon only proxies bytes. |
 
 The host CLI talks to the daemon over `~/.dockma/control.sock`: one JSON line in (`ControlRequest`), one line out (`DaemonStatus`). `wait` is answered only once the agent reports Docker ready. If the daemon stops or exits first, the connection closes without a reply. `dockma start` waits on this, plus kqueue events for the socket appearing and the daemon exiting. The fallbacks that remain:
@@ -41,7 +43,7 @@ The core library lives in `Sources/DockmaCore/`, grouped by area. Rows from Daem
 | CLI commands | `Sources/DockmaCLI/Dockma.swift` — all subcommands, plus log tailing and following |
 | Daemon lifecycle | `Daemon/Daemon.swift` — boot, signal handling, graceful stop, exit codes, time sync, log rotation |
 | VM | `VM/VMConfigurationBuilder.swift` (devices, data disk, `GuestImage` protocol check), `VM/VMHost.swift` (VZ wrapper, vsock connect), `VM/KernelCmdline.swift`, `VM/Entitlements.swift` |
-| Forwarding | `Forwarding/` — `SocketListener` (unix/TCP accept via dispatch source; optional loopback-only peer filter), `SocketCopier` (bidirectional copy with half-close), `VsockSocketProxy` (unix socket → agent vsock port; docker and shell), `PortForwarder` (reconciles the agent's port set into listeners; loopback ports below 1024 bind the wildcard and admit only loopback peers, because macOS refuses the non-root loopback bind) |
+| Forwarding | `Forwarding/` — `SocketListener` (unix/TCP accept via dispatch source; optional loopback-only peer filter), `SocketCopier` (bidirectional copy with half-close), `VsockSocketProxy` (unix socket → agent vsock port; docker and shell), `DatagramRelay` (a host UDP socket; one vsock flow per client, queued while the tunnel connects, idle expiry, a flow cap that evicts the least recently active flow, and a relay-wide byte budget for queued frames), `PortForwarder` (reconciles the agent's port set, keyed by port and transport, into listeners and relays; loopback ports below 1024 bind the wildcard and admit only loopback peers, because macOS refuses the non-root loopback bind for TCP and UDP alike) |
 | Shell client | `Shell/ShellProtocol.swift` (frames, incremental decoder), `Shell/ShellSession.swift` (raw TTY, SIGWINCH, signal forwarding, stdin/output pumps) |
 | Agent link | `Agent/AgentClient.swift` (accepts the agent's control connection, tracks Docker readiness), `Agent/AgentProtocol.swift` |
 | launchd and CLI↔daemon | `Daemon/LaunchAgent.swift`, `Daemon/ControlProtocol.swift` (also `UnixSocket`, `DockerPing`) |
@@ -50,7 +52,7 @@ The core library lives in `Sources/DockmaCore/`, grouped by area. Rows from Daem
 | Support | `Support/Subprocess.swift` (runs launchctl and docker), `Support/KernelEvents.swift` (kqueue waits for a process exit or directory change), `Support/LineIO.swift`, `Support/Log.swift`, `Support/DockerContext.swift` |
 | Guest build | `vm/Dockerfile`, `vm/kernel/dockma.config`, `vm/kernel/check-docker-config.sh` |
 | Guest boot | `vm/rootfs/init` (stage 0), `etc/inittab`, `etc/init.d/{rcS,dockerd,shutdown}`, `usr/libexec/dockma-disk` (data disk: format only when blank; tested by `vm/tests/dockma-disk-test.sh` in the guest build), `etc/docker/daemon.json`, `etc/profile` (shell prompt; runs `usr/libexec/dockma-motd`, the whalesay-style greeting on interactive logins, tested by `vm/tests/dockma-motd-test.sh`), `usr/share/udhcpc/default.script`, `etc/e2fsck.conf` (`broken_system_clock`, because the agent steps the clock after boot), `usr/lib/os-release` (`PRETTY_NAME="dockma VM"`, which `scripts/e2e.sh` checks in `docker info` to identify dockma's engine) |
-| Guest agent | `vm/agent/main.go` (servers, control dialer, port watcher and Docker readiness), `filewaiter.go` (inotify wait for dockerd's socket), `ports.go` (pure port extraction), `shell.go` (shell sessions on a pty via creack/pty or on pipes) |
+| Guest agent | `vm/agent/main.go` (servers, control dialer, port watcher and Docker readiness), `filewaiter.go` (inotify wait for dockerd's socket), `ports.go` (pure port extraction), `udp.go` (UDP flow relay and datagram framing), `shell.go` (shell sessions on a pty via creack/pty or on pipes) |
 
 ## Commands
 

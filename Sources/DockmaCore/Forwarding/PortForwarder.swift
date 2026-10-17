@@ -1,25 +1,36 @@
 import Foundation
 
-/// Mirrors the guest's published TCP ports as listeners on the host. Each
-/// accepted connection is tunnelled over vsock to dockma-agent, which dials
-/// the port inside the VM.
+/// Mirrors the guest's published TCP and UDP ports on the host. Each accepted
+/// TCP connection, and each UDP client, is tunnelled over vsock to
+/// dockma-agent, which dials the port inside the VM.
 @MainActor
 public final class PortForwarder {
     private struct Forward {
         let target: String
         let listeners: [SocketListener]
+        let relays: [DatagramRelay]
+
+        /// The listening addresses, for the log.
+        var descriptions: [String] { listeners.map(\.description) + relays.map(\.description) }
+
+        /// Closes every listener and relay.
+        func cancel() {
+            listeners.forEach { $0.cancel() }
+            relays.forEach { $0.cancel() }
+        }
     }
 
     private let host: VMHost
     private let bindAddress: String
-    private var forwards: [UInt16: Forward] = [:]
+    private var forwards: [ForwardedPort.Key: Forward] = [:]
 
     public init(host: VMHost, bindAddress: String) {
         self.host = host
         self.bindAddress = bindAddress
     }
 
-    public var ports: [UInt16] { forwards.keys.sorted() }
+    /// The forwarded ports, sorted by port and then transport.
+    public var ports: [ForwardedPort.Key] { forwards.keys.sorted() }
 
     /// The wildcard and loopback addresses also get their IPv6 counterpart, so
     /// `localhost` works whichever family a client tries first.
@@ -60,44 +71,66 @@ public final class PortForwarder {
         /// Ports to start listening on, sorted by port.
         public var toOpen: [ForwardedPort]
         /// Ports whose listeners to close, sorted.
-        public var toClose: [UInt16]
+        public var toClose: [ForwardedPort.Key]
     }
 
-    /// Computes the listener changes needed to go from `current` (port →
-    /// target) to `desired`. A port whose target changed is closed and reopened.
-    public nonisolated static func plan(current: [UInt16: String], desired: [ForwardedPort]) -> Plan {
-        let wanted = Dictionary(desired.map { ($0.port, $0.target) }, uniquingKeysWith: { first, _ in first })
+    /// Computes the listener changes needed to go from `current` (port and
+    /// transport → target) to `desired`. A port whose target changed is closed
+    /// and reopened.
+    public nonisolated static func plan(current: [ForwardedPort.Key: String], desired: [ForwardedPort]) -> Plan {
+        let wanted = Dictionary(desired.map { ($0.key, $0.target) }, uniquingKeysWith: { first, _ in first })
         let close = current.filter { wanted[$0.key] != $0.value }.map(\.key).sorted()
         let open = wanted.filter { current[$0.key] != $0.value }
-            .map { ForwardedPort(port: $0.key, target: $0.value) }
-            .sorted { $0.port < $1.port }
+            .map { ForwardedPort(port: $0.key.port, transport: $0.key.transport, target: $0.value) }
+            .sorted { $0.key < $1.key }
         return Plan(toOpen: open, toClose: close)
     }
 
     /// Opens and closes listeners so the forwarded ports match `desired`.
     public func update(_ desired: [ForwardedPort]) {
         let plan = Self.plan(current: forwards.mapValues(\.target), desired: desired)
-        for port in plan.toClose {
-            forwards.removeValue(forKey: port)?.listeners.forEach { $0.cancel() }
-            Log.info("unforwarded port \(port)")
+        for key in plan.toClose {
+            forwards.removeValue(forKey: key)?.cancel()
+            Log.info("unforwarded port \(key)")
         }
         for forward in plan.toOpen {
-            let listeners = Self.listenAddresses(for: bindAddress, port: forward.port).compactMap { listen -> SocketListener? in
-                do {
-                    return try SocketListener.tcp(address: listen.address, port: forward.port,
-                                                  acceptsOnlyLoopback: listen.acceptsOnlyLoopback) { [host, target = forward.target] client in
-                        Task { @MainActor in
-                            await Self.tunnel(client: client, target: target, host: host)
-                        }
-                    }
-                } catch {
-                    Log.info("cannot forward port \(forward.port): \(error)")
-                    return nil
+            let addresses = Self.listenAddresses(for: bindAddress, port: forward.port)
+            let listeners = forward.transport == .tcp ? addresses.compactMap { tcpListener(on: $0, for: forward) } : []
+            let relays = forward.transport == .udp ? addresses.compactMap { udpRelay(on: $0, for: forward) } : []
+            let opened = Forward(target: forward.target, listeners: listeners, relays: relays)
+            if opened.descriptions.isEmpty { continue }
+            forwards[forward.key] = opened
+            Log.info("forwarding \(opened.descriptions.joined(separator: ", ")) → \(forward.target)")
+        }
+    }
+
+    /// A TCP listener on `listen` that tunnels each connection to the
+    /// forward's target; nil, logged, if it can't bind.
+    private func tcpListener(on listen: ListenAddress, for forward: ForwardedPort) -> SocketListener? {
+        do {
+            return try SocketListener.tcp(address: listen.address, port: forward.port,
+                                          acceptsOnlyLoopback: listen.acceptsOnlyLoopback) { [host, target = forward.target] client in
+                Task { @MainActor in
+                    await Self.tunnel(client: client, target: target, host: host)
                 }
             }
-            if listeners.isEmpty { continue }
-            forwards[forward.port] = Forward(target: forward.target, listeners: listeners)
-            Log.info("forwarding \(listeners.map(\.description).joined(separator: ", ")) → \(forward.target)")
+        } catch {
+            Log.info("cannot forward port \(forward.key): \(error)")
+            return nil
+        }
+    }
+
+    /// A UDP relay on `listen` to the forward's target; nil, logged, if it
+    /// can't bind.
+    private func udpRelay(on listen: ListenAddress, for forward: ForwardedPort) -> DatagramRelay? {
+        do {
+            return try DatagramRelay(address: listen.address, port: forward.port, target: forward.target,
+                                     acceptsOnlyLoopback: listen.acceptsOnlyLoopback) { [host] in
+                try await host.connect(port: VMConfigurationBuilder.Port.tunnel)
+            }
+        } catch {
+            Log.info("cannot forward port \(forward.key): \(error)")
+            return nil
         }
     }
 

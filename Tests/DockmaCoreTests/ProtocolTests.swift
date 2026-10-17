@@ -9,6 +9,10 @@ import Testing
 
     let ports = try JSONDecoder().decode(AgentMessage.self, from: Data(#"{"type":"ports","ports":[{"port":8080,"target":"127.0.0.1:8080"}]}"#.utf8))
     #expect(ports.ports == [ForwardedPort(port: 8080, target: "127.0.0.1:8080")])
+    #expect(ports.ports?.first?.transport == .tcp)  // a missing transport means TCP
+
+    let udp = try JSONDecoder().decode(AgentMessage.self, from: Data(#"{"type":"ports","ports":[{"port":53,"transport":"udp","target":"127.0.0.1:53"}]}"#.utf8))
+    #expect(udp.ports == [ForwardedPort(port: 53, transport: .udp, target: "127.0.0.1:53")])
 
     let empty = try JSONDecoder().decode(AgentMessage.self, from: Data(#"{"type":"ports"}"#.utf8))
     #expect(empty.ports == nil)
@@ -77,4 +81,17 @@ import Testing
     #expect(DockerContext.hint(paths: paths, environment: ["DOCKER_HOST": "unix:///Users/x/.dockma/docker.sock"]) == nil)
     #expect(DockerContext.hint(paths: paths, environment: ["DOCKER_HOST": "unix:///other.sock"])?.contains("overrides") == true)
     #expect(DockerContext.hint(paths: paths, environment: [:])?.contains("docker context use dockma") == true)
+}
+
+/// A daemon that predates UDP forwarding sends no `forwardedUDPPorts`.
+@Test func decodesStatusWithoutUDPPorts() throws {
+    let json = #"{"state":"running","pid":1,"startedAt":0,"cpus":2,"memoryMiB":1024,"agentConnected":true,"forwardedPorts":[8080],"warnings":[]}"#
+    let status = try JSONDecoder().decode(DaemonStatus.self, from: Data(json.utf8))
+    #expect(status.forwardedUDPPorts == nil)
+    #expect(status.forwardedPortKeys == [ForwardedPort.Key(port: 8080, transport: .tcp)])
+
+    var withUDP = status
+    withUDP.forwardedUDPPorts = [53, 9000]
+    let decoded = try JSONDecoder().decode(DaemonStatus.self, from: JSONEncoder().encode(withUDP))
+    #expect(decoded.forwardedPortKeys.map(\.description) == ["53/udp", "8080", "9000/udp"])
 }
