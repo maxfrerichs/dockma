@@ -59,26 +59,28 @@ dockma boots a minimal Linux VM with Apple's Virtualization.framework and runs t
 
 Each [release](../../releases) has three files:
 - `dockma-<version>-macos-arm64.tar.gz`: the signed `dockma` binary;
-- `dockma-guest-<version>.tar.gz`: the guest kernel, initramfs and `guest-protocol`, built for that version's protocol;
+- `dockma-linux-<version>-arm64.tar.gz`: dockma-linux, the guest kernel, initramfs and `guest-protocol`, built for that version's protocol;
 - `SHA256SUMS`.
 
-The CLI and the guest come from the same tag; use both from one release. With the three files in the current directory:
+Install the CLI, then let it fetch dockma-linux from the same release:
 
 ```sh
-shasum -a 256 -c SHA256SUMS
+shasum -a 256 -c SHA256SUMS --ignore-missing
 # Only for files downloaded with a browser: macOS kills a quarantined,
 # unnotarized binary at launch.
-xattr -d com.apple.quarantine dockma-*.tar.gz
+xattr -d com.apple.quarantine dockma-*-macos-arm64.tar.gz
 
-mkdir -p ~/.local/bin ~/.dockma/guest
+mkdir -p ~/.local/bin
 tar -xzf dockma-*-macos-arm64.tar.gz -C ~/.local/bin dockma
-tar -xzf dockma-guest-*.tar.gz -C ~/.dockma/guest
 
+dockma install    # downloads dockma-linux-<version>-arm64.tar.gz into ~/.dockma/guest
 dockma start
 docker context use dockma
 ```
 
-The binary is ad-hoc signed, not notarized. `curl` doesn't quarantine what it downloads, so the `xattr` step isn't needed then. `gh attestation verify <file> --repo <owner>/dockma` checks that a tarball was built by this repository's release workflow.
+`dockma install` downloads the guest for its own version (`dockma --version`), checks it against the release's `SHA256SUMS` and the guest protocol, and replaces `~/.dockma/guest` in one atomic step. A running VM keeps its guest until `dockma restart`. `DOCKMA_RELEASE_URL` points it at another directory with the same files (a URL such as a mirror, or a local path). Without network access, unpack the tarball yourself: `tar -xzf dockma-linux-*.tar.gz -C ~/.dockma/guest`.
+
+The binary is ad-hoc signed, not notarized. `curl` doesn't quarantine what it downloads, so the `xattr` step isn't needed then. `gh attestation verify <file> --repo <owner>/dockma` checks that a tarball was built by this repository's release workflow; `dockma install` doesn't do that check.
 
 ### From source
 
@@ -110,6 +112,7 @@ If `DOCKER_HOST` is already set, it takes precedence over docker contexts. This 
 ## Usage
 
 ```
+dockma install                    Download this version's Linux guest (dockma-linux) into ~/.dockma/guest
 dockma start [--timeout <s>]      Start the VM in the background and wait until Docker answers
 dockma stop                       Shut the VM down gracefully
 dockma restart [--timeout <s>]    Stop, then start
@@ -190,8 +193,9 @@ The directory and `logs/` are kept at mode 0700, and `data.img`, `config.json` a
 | `daemon.lock` | Held by the running daemon, so a second one can't boot another VM on the same disk |
 | `config.json` | Settings |
 | `data.img` | Sparse raw disk, ext4, mounted at `/var/lib/docker` in the guest |
-| `guest/Image`, `guest/initramfs.cpio.lz4` | Guest kernel and initramfs |
+| `guest/Image`, `guest/initramfs.cpio.lz4` | Guest kernel and initramfs, from `dockma install` or `make install-guest` |
 | `guest/guest-protocol` | The host↔guest protocol number the guest was built for. `dockma start` refuses a guest that doesn't match. |
+| `.guest-install.lock` | Held by a running `dockma install`, which also clears staging folders that a killed install left behind |
 | `logs/console.log` | Kernel and init output; the previous boot is kept as `console.log.1` |
 | `logs/docker.log` | dockerd output; the previous boot is kept as `docker.log.1` |
 | `logs/daemon.log` | Host daemon output; the previous run is kept as `daemon.log.1` |

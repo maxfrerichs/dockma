@@ -1,7 +1,8 @@
 # Builds the guest kernel and initramfs with `make guest`, which also runs
 # the agent's go vet / go test and the guest script tests, and uploads them
-# as a tarball that unpacks into ~/.dockma/guest/. release.yml calls this
-# with a version and the tag to build.
+# as dockma-linux-<version>-arm64.tar.gz, which unpacks into ~/.dockma/guest/
+# (`dockma install` downloads it). release.yml calls this with a version and
+# the tag to build.
 name: guest
 
 on:
@@ -55,7 +56,7 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           version="${VERSION:-${GITHUB_SHA::12}}"
-          name="dockma-guest-${version}.tar.gz"
+          name="dockma-linux-${version}-arm64.tar.gz"
           ls -l vm/out
           tar -czf "$name" -C vm/out Image initramfs.cpio.lz4 guest-protocol
           echo "name=$name" >> "$GITHUB_OUTPUT"

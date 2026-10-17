@@ -11,7 +11,10 @@ public enum GuestImage {
     /// Throws when the guest image is missing or speaks another protocol.
     public static func validate(paths: Paths) throws {
         for url in [paths.kernel, paths.initrd] where !FileManager.default.fileExists(atPath: url.path) {
-            throw DockmaError("guest image missing: \(url.path)\nBuild it with `make guest install-guest`.")
+            throw DockmaError("""
+                guest image missing: \(url.path)
+                Install it with `dockma install`, or build it with `make guest install-guest`.
+                """)
         }
         let installed = installedProtocol(at: paths.guestProtocol)
         guard installed == protocolVersion else {
@@ -19,7 +22,7 @@ public enum GuestImage {
             throw DockmaError("""
                 the guest image in \(paths.guest.path) is \(age) than this dockma \
                 (guest protocol \(installed), need \(protocolVersion)).
-                Rebuild it with `make guest install-guest`.
+                Install the matching one with `dockma install`, or rebuild it with `make guest install-guest`.
                 """)
         }
     }

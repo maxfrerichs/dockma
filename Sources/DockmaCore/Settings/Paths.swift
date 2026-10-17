@@ -36,6 +36,8 @@ public struct Paths: Sendable {
     public var initrd: URL { guest.appendingPathComponent("initramfs.cpio.lz4") }
     /// The host↔guest protocol number the guest image was built for.
     public var guestProtocol: URL { guest.appendingPathComponent("guest-protocol") }
+    /// Held (flock) by a running `dockma install`.
+    public var guestInstallLock: URL { root.appendingPathComponent(".guest-install.lock") }
 
     /// Creates the state directories and keeps the root and logs private
     /// (0700) on every call, which also fixes older installs. The data disk

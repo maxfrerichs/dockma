@@ -43,6 +43,28 @@ dockma start [--timeout=<timeout>] [--version] [--help]
 
 
 
+## dockma.install
+
+Download the Linux guest (dockma-linux) of this version into ~/.dockma/guest.
+
+```
+dockma install [--version] [--help]
+```
+
+Fetches dockma-linux-<version>-arm64.tar.gz from the GitHub release that matches `dockma --version`, checks it against the release's SHA256SUMS and replaces the installed guest. DOCKMA_RELEASE_URL points it at another directory of release assets.
+
+**--version:**
+
+*Show the version.*
+
+
+**--help:**
+
+*Show help information.*
+
+
+
+
 ## dockma.stop
 
 Shut the VM down gracefully.

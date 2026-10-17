@@ -8,7 +8,7 @@ struct Dockma: ParsableCommand {
         commandName: "dockma",
         abstract: "Lightweight Docker on macOS",
         version: DockmaVersion.current,
-        subcommands: [Start.self, Stop.self, Restart.self, Status.self, ShellCommand.self, Logs.self, ConfigCommand.self, Delete.self, DaemonCommand.self])
+        subcommands: [Start.self, Install.self, Stop.self, Restart.self, Status.self, ShellCommand.self, Logs.self, ConfigCommand.self, Delete.self, DaemonCommand.self])
 }
 
 /// Absolute path of this binary, which launchd runs as the daemon.
@@ -181,6 +181,42 @@ struct Start: ParsableCommand {
             let event = events.wait(timeout: isWatchingExit ? remaining : min(remaining, .seconds(1)))
             if event == .processExited { throw StartFailure.daemonExited }
             if !isWatchingExit { try checkJob() }
+        }
+    }
+}
+
+struct Install: ParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Download the Linux guest (dockma-linux) of this version into ~/.dockma/guest.",
+        discussion: """
+            Fetches dockma-linux-<version>-arm64.tar.gz from the GitHub release that matches \
+            `dockma --version`, checks it against the release's SHA256SUMS and replaces the \
+            installed guest. DOCKMA_RELEASE_URL points it at another directory of release assets.
+            """)
+
+    /// Downloads, verifies and installs the guest of this dockma version.
+    func run() throws {
+        let paths = Paths.default()
+        let version = DockmaVersion.current
+        let baseURL = GuestRelease.baseURL(version: version, environment: ProcessInfo.processInfo.environment)
+        let style = TerminalStyle.standardOutput()
+        print("Downloading dockma-linux \(version)…")
+        // Before curl's progress bar or an error reaches stderr.
+        fflush(stdout)
+        do {
+            try GuestRelease.install(version: version, from: baseURL, paths: paths,
+                                     showsProgress: isatty(STDERR_FILENO) == 1)
+        } catch let error as DockmaError {
+            throw DockmaError("""
+                \(error.description)
+                If this dockma was built from source, install its guest with `make guest install-guest` instead.
+                """)
+        }
+        print(style.success("Installed dockma-linux \(version)") + " in \(paths.guest.path)")
+        if (try? ControlClient.status(paths: paths)) != nil {
+            print("  The running VM keeps its current guest until `dockma restart`.")
+        } else {
+            print("  Start it with `dockma start`.")
         }
     }
 }
