@@ -4,6 +4,8 @@ All notable changes to dockma are recorded here. The format follows [Keep a Chan
 
 ## Unreleased
 
+## 0.3.0 – 2026-10-17
+
 ### Added
 - `dockma install` downloads the Linux guest (dockma-linux) for its own version from the GitHub release, checks it against the release's `SHA256SUMS` and the guest protocol, and replaces `~/.dockma/guest` atomically. A failed download or check leaves the installed guest alone. `DOCKMA_RELEASE_URL` points it at another directory of release assets.
 
