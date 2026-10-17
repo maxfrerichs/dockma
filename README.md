@@ -1,17 +1,18 @@
 # dockma
 
-Run Docker on macOS using a lightweight virtual machine.
+Lightweight Docker on macOS.
 
-dockma runs a lightweight Linux VM with a custom-built kernel and leverages Apple's Virtualization.framework. This virtual machine runs in the background and provides the Docker Engine.
-The macOS `docker` CLI communicate to dockerd through a Unix socket. Your home directory is shared into the VM.
+## About
+
+dockma boots a minimal Linux VM with Apple's Virtualization.framework and runs the Docker Engine inside it. The macOS `docker` CLI talks to it through a Unix socket, and a launchd job keeps it running in the background. Your home directory is shared into the VM.
 
 ## Features
 
-- **Lightweight guest OS.**
+- **Minimal guest OS.**
   - Kernel: a custom 6.18 LTS kernel built from `tinyconfig` plus only the drivers and features Docker needs. Everything is built in, with no modules. It is compiled with `-O2` and the regular SLUB allocator, not tinyconfig's size-first `-Os` and `SLUB_TINY`.
   - Userspace: a busybox initramfs containing Docker's static binaries and a small guest agent.
   - Boots in around 1.1s
-- **home directory mount**
+- **Shared `$HOME` directory.**
   - `$HOME` is mounted inside the VM at the identical path (for example `/Users/you`) via virtiofs.
   - So `docker run -v "$PWD:/src"` works from anywhere under your home directory.
 - **Published ports on localhost.**
@@ -28,7 +29,7 @@ The macOS `docker` CLI communicate to dockerd through a Unix socket. Your home d
   - `docker run --platform linux/amd64 …` runs x86-64 images through Rosetta for Linux.
 - **Runs in the background.**
   - A per-user launchd job keeps the VM running after the CLI exits.
-  - It restarts the VM if the guest dies for some reason
+  - It restarts the VM if the guest crashes.
 - **A shell in the VM.**
   - `dockma shell` opens a root shell inside the VM; `dockma shell -- <cmd>` runs a single command there.
   - It goes through the guest agent rather than Docker, so it still works when dockerd is broken.
@@ -84,7 +85,7 @@ If `DOCKER_HOST` is already set, it takes precedence over docker contexts. This 
 ```
 dockma start [--timeout <s>]      Start the VM in the background and wait until Docker answers
 dockma stop                       Shut the VM down gracefully
-dockma restart                    Stop, then start
+dockma restart [--timeout <s>]    Stop, then start
 dockma status [--json]            State, uptime, resources, guest kernel, forwarded ports
 dockma shell [-t|-T] [-- cmd …]   Root shell in the VM, or run a command there
 dockma logs [-n N] [-f]           Kernel and boot log of the VM
@@ -102,8 +103,8 @@ state:    running
 docker:   ready (/Users/you/.dockma/docker.sock)
 uptime:   12m 4s
 vm:       6 CPUs, 4096 MiB, kernel 6.18.57
-agent:    connected 0.2.0
-ports:    8080
+agent:    connected 0.5.0
+ports:    8080, 1053/udp
 daemon:   pid 55658
 ```
 
@@ -233,6 +234,8 @@ make test           # unit tests (Swift Testing)
 make e2e            # build, then scripts/e2e.sh against a real VM
 make guest          # rebuild the guest; also runs the agent's go vet / go test
 make install-guest  # copy the rebuilt guest to ~/.dockma/guest
+make site           # build the website into site/public (needs Hugo)
+make site-serve     # preview the website locally
 scripts/bench.sh    # boot and network benchmark; restarts the VM RUNS times (default 5)
 ```
 
@@ -241,7 +244,7 @@ scripts/bench.sh    # boot and network benchmark; restarts the VM RUNS times (de
 - hello-world;
 - the home bind mount;
 - stdin half-close;
-- localhost port forwarding and its removal;
+- localhost port forwarding and its removal, for TCP and for UDP on the same port;
 - Rosetta;
 - logs;
 - persistence across restart, plus a registry pull;
@@ -300,4 +303,3 @@ scripts/site-prepare.py   derives the site's version facts (vm/Dockerfile) and c
   - `--autostart`;
   - `delete`;
   - home paths that contain spaces.
-- The kernel and userspace are custom builds. Supporting a new Docker feature can require a new kernel option in `vm/kernel/dockma.config`.

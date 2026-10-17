@@ -6,7 +6,7 @@ import DockmaCore
 struct Dockma: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "dockma",
-        abstract: "Run Docker on macOS through a minimal Linux VM.",
+        abstract: "Lightweight Docker on macOS",
         subcommands: [Start.self, Stop.self, Restart.self, Status.self, ShellCommand.self, Logs.self, ConfigCommand.self, Delete.self, DaemonCommand.self])
 }
 

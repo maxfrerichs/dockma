@@ -3,7 +3,7 @@
 - title: "Shared $HOME directory"
   body: 'Your home directory is shared via virtiofs at the identical path, so <code>-v "$PWD:/src"</code> just works.'
 - title: "Automatic port forwarding"
-  body: "<code>-p 8080:80</code> is reachable at <code>localhost:8080</code>, IPv4 and IPv6. Gone when the container stops."
+  body: "<code>-p 8080:80</code> is reachable at <code>localhost:8080</code>, IPv4 and IPv6, and <code>-p 1053:53/udp</code> works the same way. Gone when the container stops."
 - title: "Run your amd64 containers via Rosetta."
   body: "<code>--platform linux/amd64</code> runs x86-64 images through Rosetta for Linux."
 - title: "dockma shell"
