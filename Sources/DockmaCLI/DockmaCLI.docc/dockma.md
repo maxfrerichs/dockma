@@ -240,7 +240,7 @@ dockma config [--cpus=<cpus>] [--memory=<memory>] [--disk=<disk>]
 
 **--port-bind-address=\<port-bind-address\>:**
 
-*Host address published ports are bound to (127.0.0.1 or 0.0.0.0).*
+*Host address published ports are bound to: 127.0.0.1 (this Mac only), 0.0.0.0 (all interfaces) or one interface's address.*
 
 
 **--rosetta=\<rosetta\>:**

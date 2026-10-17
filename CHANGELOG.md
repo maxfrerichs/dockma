@@ -7,6 +7,34 @@ All notable changes to dockma are recorded here. The format follows [Keep a Chan
 ### Added
 - `install.sh` installs the newest release: `curl -fsSL https://maxfrerichs.github.io/dockma/install.sh | sh`. It checks the CLI tarball against the release's `SHA256SUMS`, and against its build provenance attestation when a logged-in `gh` is available. It then fetches the matching guest with the new binary's `dockma install` and installs `dockma` to `~/.local/bin`; a failed guest download leaves the existing installation alone. It installs 0.3.0 or later. `DOCKMA_VERSION`, `DOCKMA_INSTALL_DIR`, `DOCKMA_SKIP_GUEST` and `DOCKMA_RELEASE_URL` adjust it.
 - The website shows the install command in its header and in the quick start, next to the build from source.
+- `host.docker.internal` and `gateway.docker.internal` resolve to the Mac in every container, and `--add-host name:host-gateway` points at the Mac instead of the VM. The guest agent serves DNS for containers and relays other names to the DNS servers from the DHCP lease.
+- `~/.dockma/daemon.json` is merged over dockerd's configuration at every start, for registry mirrors, insecure registries, proxies, address pools and the like. dockma keeps `hosts`, `group`, `data-root` and `firewall-backend`, and falls back to its own configuration if dockerd rejects the result. `~/.dockma/ca-certificates/*.crt` adds CA certificates (for example a TLS-intercepting proxy's), and `~/.dockma/certs.d/` holds per-registry certificates.
+- The kernel has `/dev/net/tun`, for VPN containers such as Tailscale, and xtables over nftables, for the iptables-nft that Docker-in-Docker, kind and k3s run.
+- The guest trims the data disk hourly, so `data.img` shrinks on the Mac after images and containers are deleted.
+- `dockma status` warns about published ports that a Mac process holds, and the daemon forwards them within 10 s of the port coming free. Before, such a port stayed unforwarded, with only a line in the daemon log, until the container's ports changed.
+- `dockma status` shows the daemon's version, and warns when it differs from the CLI's (run `dockma restart` after upgrading).
+- `dockma config` warns when `--cpus` exceeds the Mac's cores or `--memory` 75% of its RAM.
+- A README section on uninstalling.
+
+### Changed
+- **The guest image must be updated** (`dockma install`, or `make guest install-guest` from source, then `dockma restart`). The protocol is unchanged, so an older guest still runs, but without this release's guest-side changes. The agent is 0.6.0.
+- Each container's log is capped at three 10 MB files by default (`log-opts`); set your own `log-opts` or `log-driver` in `~/.dockma/daemon.json` to change that.
+- Containers get an open-files limit of 1048576 (was 1024 soft, 4096 hard), and `vm.max_map_count` is 262144, which Elasticsearch, OpenSearch and SonarQube need.
+- A `DOCKMA_HOME` instance gets a launchd job of its own (`io.dockma.daemon.<hash>`), so it no longer stops or confuses the VM in `~/.dockma`, and it leaves the `dockma` docker context alone. A job an older dockma loaded for that `DOCKMA_HOME` is replaced on the next `start` or `stop`, but only if launchd loaded it from that directory's plist, so a leftover plist can't stop the `~/.dockma` VM. Symlinked paths to one state directory get one job.
+- `make e2e` runs against a VM of its own in `~/.dockma-e2e` instead of stopping and restarting yours, and refuses `~/.dockma` unless `E2E_FORCE=1`. `make install-guest` honours `DOCKMA_HOME`.
+- `dockma status` and `status --json` report the CPUs and memory the VM actually got, after Virtualization.framework's limits, and warn when they differ from the settings.
+- Logs keep three previous generations (`.1` to `.3`) instead of one, so a crash loop doesn't rotate away the first crash.
+- `dockma stop` gives the guest 25 s to power off (was 20 s), and the guest gives dockerd 20 s (was 15 s), more than dockerd's own 15 s shutdown with default stop timeouts.
+- Config errors name both the `config.json` key and the `dockma config` flag (`memoryMiB (--memory) must be at least 512`), and an unreadable `config.json` names the offending key and suggests deleting the file.
+
+### Fixed
+- A guest kernel panic left the VM hung while `dockma status` reported it running. The kernel now reboots after 5 s (`panic=5`), and the VM comes back up in place.
+- A DHCP lease renewal removed and re-added the VM's address, dropping the default route and the NAT state of every outgoing container connection. The address is now only replaced when it changes.
+- Containers allowed to open vsock sockets (privileged, or with `seccomp=unconfined`) could connect to the agent's ports through vsock loopback and get a root shell in the VM. The kernel has no vsock loopback anymore, and the agent accepts only the host.
+- A VM error while stopping made the daemon exit non-zero, so launchd started the VM that `dockma stop` had just stopped.
+- A failed write to the daemon log, such as on a full disk, aborted the daemon and hard-stopped the VM.
+- `dockma config --disk` accepted a size below the current disk, and the next start failed.
+- `dockma stop` could leave the data disk dirty (`recovering journal` on the next boot). The guest stopped waiting for dockerd after about a second, because `pidof dockerd` also matched the init script that runs it, and powered off while dockerd was still stopping containers. It now waits on dockerd itself for up to 20 s, then kills what is left before unmounting.
 
 ## 0.3.0 – 2026-10-17
 
