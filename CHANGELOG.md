@@ -4,9 +4,12 @@ All notable changes to dockma are recorded here. The format follows [Keep a Chan
 
 ## Unreleased
 
+## 0.4.0 – 2026-10-17
+
 ### Added
 - `install.sh` installs the newest release: `curl -fsSL https://maxfrerichs.github.io/dockma/install.sh | sh`. It checks the CLI tarball against the release's `SHA256SUMS`, and against its build provenance attestation when a logged-in `gh` is available. It then fetches the matching guest with the new binary's `dockma install` and installs `dockma` to `~/.local/bin`; a failed guest download leaves the existing installation alone. It installs 0.3.0 or later. `DOCKMA_VERSION`, `DOCKMA_INSTALL_DIR`, `DOCKMA_SKIP_GUEST` and `DOCKMA_RELEASE_URL` adjust it.
 - The website shows the install command in its header and in the quick start, next to the build from source.
+- The website has search and sharing metadata: canonical URLs, Open Graph and Twitter cards, structured data, a sitemap, `robots.txt`, a favicon and a share image.
 - `host.docker.internal` and `gateway.docker.internal` resolve to the Mac in every container, and `--add-host name:host-gateway` points at the Mac instead of the VM. The guest agent serves DNS for containers and relays other names to the DNS servers from the DHCP lease.
 - `~/.dockma/daemon.json` is merged over dockerd's configuration at every start, for registry mirrors, insecure registries, proxies, address pools and the like. dockma keeps `hosts`, `group`, `data-root` and `firewall-backend`, and falls back to its own configuration if dockerd rejects the result. `~/.dockma/ca-certificates/*.crt` adds CA certificates (for example a TLS-intercepting proxy's), and `~/.dockma/certs.d/` holds per-registry certificates.
 - The kernel has `/dev/net/tun`, for VPN containers such as Tailscale, and xtables over nftables, for the iptables-nft that Docker-in-Docker, kind and k3s run.
