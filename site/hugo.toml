@@ -1,4 +1,4 @@
-baseURL = "https://OWNER.github.io/dockma/"
+baseURL = "https://maxfrerichs.github.io/dockma/"
 title = "dockma"
 locale = "en"
 disableKinds = ["taxonomy", "term", "RSS", "sitemap"]
@@ -8,7 +8,7 @@ enableRobotsTXT = false
   description = "dockma provides Docker on macOS by running the Docker engine in a lightweight virtual machine."
   tagline = "Lightweight Docker on macOS, free and open source."
   # CI overrides this with HUGO_PARAMS_REPO=<owner>/<repo>.
-  repo = "OWNER/dockma"
+  repo = "maxfrerichs/dockma"
   # Measured by scripts/bench.sh, so not derivable from source; update by hand.
   bootSeconds = "1.1"
 
