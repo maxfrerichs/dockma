@@ -29,10 +29,15 @@ public enum Subprocess {
         try process.run()
         // Drain both pipes at once: reading them one after the other blocks
         // a child that fills the stderr pipe while stdout is being read.
+        // The drain runs on its own serial queue, which always gets a thread.
+        // On DispatchQueue.global() it could wait forever: that queue shares
+        // its per-CPU thread budget with the Swift cooperative pool, so
+        // callers blocked here on every pool thread (tests on a 3-CPU CI
+        // runner) left it no thread to run on.
         nonisolated(unsafe) var stderrData = Data()
         let stderrDone = DispatchGroup()
         stderrDone.enter()
-        DispatchQueue.global().async {
+        DispatchQueue(label: "dockma.subprocess.stderr").async {
             if !inheritingStandardError {
                 stderrData = err.fileHandleForReading.readDataToEndOfFile()
             }

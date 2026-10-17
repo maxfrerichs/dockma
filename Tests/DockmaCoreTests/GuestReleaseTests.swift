@@ -161,3 +161,18 @@ private let validGuest: [String: String?] = [
         #expect(try !fixture.hasStaging(), "\(name)")
     }
 }
+
+/// More callers than CPUs block in `Subprocess.run` at once, as the install
+/// tests do on a small CI runner. Every cooperative thread is then blocked,
+/// and the run must still finish: its stderr drain can't need another
+/// thread from the same budget.
+@Test func subprocessFinishesWhenEveryPoolThreadIsBlocked() async {
+    let callers = ProcessInfo.processInfo.activeProcessorCount * 2
+    let statuses = await withTaskGroup(of: Int32?.self) { group in
+        for _ in 0..<callers {
+            group.addTask { try? Subprocess.run("/usr/bin/true", arguments: []).status }
+        }
+        return await group.reduce(into: [Int32?]()) { $0.append($1) }
+    }
+    #expect(statuses == Array(repeating: 0, count: callers))
+}
