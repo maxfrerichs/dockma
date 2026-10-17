@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ if .IsHome }}{{ site.Title }}{{ else }}{{ .Title }} · {{ site.Title }}{{ end }}</title>
+<meta name="description" content="{{ if .IsHome }}{{ site.Params.description }}{{ else }}{{ .Params.summary | default site.Params.description }}{{ end }}">
+<meta property="og:title" content="{{ site.Title }}">
+<meta property="og:description" content="{{ site.Params.tagline }}">
+<meta property="og:type" content="website">
+<meta name="color-scheme" content="light dark">
+<link rel="preload" href="{{ "fonts/JetBrainsMono-ExtraBold.woff2" | relURL }}" as="font" type="font/woff2" crossorigin>
+<style>
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("{{ "fonts/JetBrainsMono-Regular.woff2" | relURL }}") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("{{ "fonts/JetBrainsMono-ExtraBold.woff2" | relURL }}") format("woff2");
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+
+{{ $css := slice (resources.Get "site.css") (resources.Get "reference.css") | resources.Concat "site.css" -}}
+{{ $css.Content | safeCSS }}
+</style>
+</head>
+<body>
+<div class="wrap">
+{{ block "main" . }}{{ end }}
+{{ partial "footer.html" . }}
+</div>
+{{ partial "copy-script.html" . }}
+</body>
+</html>

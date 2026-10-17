@@ -1,0 +1,6 @@
+{{- /* Renders data/quickstart.yaml; "#" starts a comment, wrapped in span.c (the copy button drops those). */ -}}
+{{- range $i, $line := hugo.Data.quickstart -}}
+{{- if $i }}
+{{ end -}}
+{{- $line | htmlEscape | replaceRE `(#.*)$` `<span class="c">$1</span>` | safeHTML -}}
+{{- end -}}

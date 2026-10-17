@@ -1,0 +1,7 @@
+{{ define "main" -}}
+<p class="crumbs"><a href="{{ "" | relURL }}">dockma</a> / <a href="{{ "reference/" | relURL }}">reference</a> / {{ .Title }}</p>
+<article>
+  <h1>{{ .Title }}</h1>
+  {{ .Content }}
+</article>
+{{- end }}

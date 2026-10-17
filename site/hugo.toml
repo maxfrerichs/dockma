@@ -1,0 +1,24 @@
+baseURL = "https://OWNER.github.io/dockma/"
+title = "dockma"
+locale = "en"
+disableKinds = ["taxonomy", "term", "RSS", "sitemap"]
+enableRobotsTXT = false
+
+[params]
+  description = "dockma provides Docker on macOS by running the Docker engine in a lightweight virtual machine."
+  tagline = "Lightweight Docker on macOS, free and open source."
+  # CI overrides this with HUGO_PARAMS_REPO=<owner>/<repo>.
+  repo = "OWNER/dockma"
+  # Measured by scripts/bench.sh, so not derivable from source; update by hand.
+  bootSeconds = "1.1"
+
+[markup.goldmark.renderer]
+  unsafe = true
+
+# Plain <pre><code>, styled by the site's own CSS, instead of Chroma's inline styles.
+[markup.highlight]
+  codeFences = false
+
+# Typographer would turn `--flag` into an en dash.
+[markup.goldmark.extensions]
+  typographer = false

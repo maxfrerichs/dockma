@@ -8,7 +8,7 @@ PREFIX ?= $(HOME)/.local
 BIN = $(shell swift build -c $(CONFIGURATION) --show-bin-path 2>/dev/null)/dockma
 GUEST_DIR := $(HOME)/.dockma/guest
 
-.PHONY: build install test guest install-guest e2e clean
+.PHONY: build install test guest install-guest e2e site site-serve clean
 
 build:
 	swift build -c $(CONFIGURATION) --product dockma
@@ -41,6 +41,16 @@ install-guest: vm/out/Image vm/out/initramfs.cpio.lz4 vm/out/guest-protocol
 e2e: build
 	DOCKMA=$(BIN) scripts/e2e.sh
 
+# The website: scripts/site-prepare.py derives site/data/facts.json and the
+# command reference pages, then Hugo builds site/public.
+site:
+	python3 -I scripts/site-prepare.py .
+	hugo --source site --gc --minify
+
+site-serve:
+	python3 -I scripts/site-prepare.py .
+	hugo server --source site
+
 clean:
 	swift package clean
-	rm -rf vm/out
+	rm -rf vm/out site/public site/resources

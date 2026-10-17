@@ -1,0 +1,9 @@
+# The `dockma status` sample; {kernel} comes from vm/Dockerfile.
+text: |
+  state:    running
+  docker:   ready (/Users/you/.dockma/docker.sock)
+  uptime:   12m 4s
+  vm:       6 CPUs, 4096 MiB, kernel {kernel}
+  agent:    connected 0.2.0
+  ports:    8080
+  daemon:   pid 55658

@@ -1,0 +1,12 @@
+- title: "Boots in ~{boot}s"
+  body: "Custom-built {kernelSeries} LTS kernel with only the stuff Docker actually needs - nothing else."
+- title: "Shared $HOME directory"
+  body: 'Your home directory is shared via virtiofs at the identical path, so <code>-v "$PWD:/src"</code> just works.'
+- title: "Automatic port forwarding"
+  body: "<code>-p 8080:80</code> is reachable at <code>localhost:8080</code>, IPv4 and IPv6. Gone when the container stops."
+- title: "Run your amd64 containers via Rosetta."
+  body: "<code>--platform linux/amd64</code> runs x86-64 images through Rosetta for Linux."
+- title: "dockma shell"
+  body: "If you want to inspect the VM, dockma has you covered."
+- title: "Lightweight daemon."
+  body: "Runs under launchd and restarts after a guest crash. <code>dockma stop</code> powers off cleanly; data persists."

@@ -1,0 +1,11 @@
+{{- $gh := printf "https://github.com/%s" site.Params.repo -}}
+<footer>
+  <nav aria-label="Project links">
+    <a href="{{ "reference/" | relURL }}">Command reference</a>
+    <a href="{{ $gh }}/blob/main/README.md">README</a>
+    <a href="{{ $gh }}/blob/main/README.md#limitations">Limitations</a>
+    <a href="{{ $gh }}/blob/main/CONTRIBUTING.md">Contributing</a>
+    <a href="{{ $gh }}/issues">Issues</a>
+  </nav>
+  <p>Docker and the Docker logo are trademarks of Docker, Inc. dockma is not affiliated with or endorsed by Docker, Inc.</p>
+</footer>

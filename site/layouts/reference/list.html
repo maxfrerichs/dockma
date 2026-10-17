@@ -1,0 +1,12 @@
+{{ define "main" -}}
+<p class="crumbs"><a href="{{ "" | relURL }}">dockma</a> / reference</p>
+<article>
+  <h1>Command reference</h1>
+  <p>Generated from the CLI's ArgumentParser definitions.</p>
+  <ul class="cmds">
+    {{- range .Pages.ByWeight }}
+    <li><a href="{{ .RelPermalink }}">{{ .Title }}</a><p>{{ .Params.summary }}</p></li>
+    {{- end }}
+  </ul>
+</article>
+{{- end }}

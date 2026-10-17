@@ -1,0 +1,12 @@
+
+/* Command reference pages */
+.crumbs { font-size: 13px; color: var(--muted); padding: 16px 0; }
+article { padding: 24px 0 40px; border-top: 2px solid var(--rule); }
+article h1 { font-weight: 800; font-size: 28px; letter-spacing: -0.02em; margin: 0 0 16px; }
+article pre { background: var(--code-bg); color: var(--code-ink); padding: 18px; overflow-x: auto; font-size: 13px; line-height: 1.55; margin: 0 0 16px; }
+article em { color: var(--muted); }
+.cmds { list-style: none; margin: 0; padding: 0; border-top: 2px solid var(--rule); border-left: 2px solid var(--rule); display: grid; grid-template-columns: 1fr; }
+@media (min-width: 600px) { .cmds { grid-template-columns: 1fr 1fr; } }
+.cmds li { border-right: 2px solid var(--rule); border-bottom: 2px solid var(--rule); padding: 18px; }
+.cmds a { font-weight: 800; }
+.cmds p { color: var(--muted); font-size: 13px; margin: 8px 0 0; }

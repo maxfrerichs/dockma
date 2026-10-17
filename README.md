@@ -273,6 +273,8 @@ vm/tests/                 guest script tests, run during the guest build
 scripts/e2e.sh            end-to-end test
 scripts/bench.sh          boot, network and disk benchmark (restarts the VM)
 scripts/bench-build-steps.py  per-step build times and extracted layers, for bench.sh
+site/                     website (Hugo): templates, data, fonts; deployed to GitHub Pages by .github/workflows/pages.yml
+scripts/site-prepare.py   derives the site's version facts (vm/Dockerfile) and command reference (docc file)
 ```
 
 ## Troubleshooting

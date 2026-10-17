@@ -1,0 +1,20 @@
+<script>
+document.querySelectorAll("[data-copy]").forEach(function (button) {
+  button.addEventListener("click", function () {
+    // Copy only the commands: zsh rejects # comments at the prompt by default.
+    var block = document.getElementById(button.dataset.copy).cloneNode(true);
+    block.querySelectorAll(".c").forEach(function (comment) { comment.remove(); });
+    var text = block.textContent.split("\n")
+      .map(function (line) { return line.trimEnd(); })
+      .filter(function (line) { return line !== ""; })
+      .join("\n") + "\n";
+    navigator.clipboard.writeText(text).then(function () {
+      button.textContent = "copied";
+    }, function () {
+      button.textContent = "failed";
+    }).then(function () {
+      setTimeout(function () { button.textContent = "copy"; }, 1500);
+    });
+  });
+});
+</script>

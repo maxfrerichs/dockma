@@ -1,0 +1,82 @@
+{{ define "main" -}}
+{{- $facts := hugo.Data.facts -}}
+{{- $gh := printf "https://github.com/%s" site.Params.repo -}}
+<header class="hero">
+{{ partial "whale.html" . }}
+  <div>
+    <h1 class="wordmark">dockma</h1>
+    <p class="tagline">Lightweight Docker on macOS,<br>free and open source.</p>
+    <div class="actions">
+      <a class="btn primary" href="{{ $gh }}">GitHub →</a>
+      <a class="btn" href="#quick-start">Quick start ↓</a>
+    </div>
+  </div>
+</header>
+
+<p class="status"><strong>Status:</strong> early &amp; experimental · Apple Silicon only · tested on macOS 27</p>
+
+<main>
+
+<section aria-labelledby="what">
+  <h2 id="what">tl;dr</h2>
+  <p>dockma boots a lightweight Linux VM with Apple's Virtualization.framework and runs the Docker Engine inside it. The macOS <code>docker</code> CLI communicates to it through a Unix socket. A launchd job keeps it running in the background.</p>
+</section>
+
+<section aria-labelledby="features">
+  <h2 id="features">Features</h2>
+  <div class="grid">
+    {{- range hugo.Data.features }}
+    {{- $title := replace .title "{boot}" site.Params.bootSeconds }}
+    {{- $body := replace .body "{kernelSeries}" $facts.kernelSeries }}
+    <div class="cell">
+      <h3>{{ $title }}</h3>
+      <p>{{ $body | safeHTML }}</p>
+    </div>
+    {{- end }}
+  </div>
+</section>
+
+<section aria-labelledby="quick-start">
+  <h2 id="quick-start">Quick start</h2>
+  <div class="code">
+    <button class="copy" type="button" data-copy="quickstart">copy</button>
+<pre id="quickstart">{{ partial "quickstart.html" . }}</pre>
+  </div>
+  <p class="note">Needs an Apple Silicon Mac, Xcode with Swift 6.4, the <code>docker</code> CLI (<code>brew install docker</code>), and any arm64 Docker engine with buildx for the first guest build. Optional: Rosetta for amd64 images. If <code>DOCKER_HOST</code> is set (Lima does this), it overrides the context.</p>
+</section>
+
+<section aria-labelledby="status-demo">
+  <h2 id="status-demo">At a glance</h2>
+  <div class="code">
+<pre><span class="p">$ </span>dockma status
+{{ replace (strings.TrimRight "\n" (index hugo.Data "status-sample").text) "{kernel}" $facts.kernel | htmlEscape | safeHTML }}</pre>
+  </div>
+</section>
+
+<section aria-labelledby="how">
+  <h2 id="how">How it works</h2>
+  <div class="arch" role="img" aria-label="Architecture diagram: the docker CLI, the dockma CLI and apps using published localhost ports talk to the dockma daemon on macOS, which forwards them over vsock to dockma-agent in the Linux guest; the agent reaches dockerd, docker-proxy and /bin/sh. $HOME and Rosetta are shared via virtiofs, the data disk via virtio-blk.">
+    <div class="arch-box">
+      <span class="arch-label">macOS</span>
+      <div class="arch-chips"><span>docker</span><span>dockma</span><span>localhost:P</span></div>
+    </div>
+    <span class="arch-arrow">▼</span>
+    <div class="arch-box accent">
+      <strong>dockma daemon</strong>
+      <span class="arch-sub">launchd job · owns the VM</span>
+    </div>
+    <div class="arch-bus"><span>vsock</span></div>
+    <div class="arch-box">
+      <span class="arch-label">Linux guest</span>
+      <strong class="accent-text">dockma-agent</strong>
+      <span class="arch-arrow">▼</span>
+      <div class="arch-chips"><span>dockerd</span><span>docker-proxy</span><span>/bin/sh</span></div>
+    </div>
+    <p class="arch-mounts">virtiofs: $HOME, Rosetta · virtio-blk: /var/lib/docker</p>
+  </div>
+  <p>A lightweight daemon owns the VM and pipes the Docker, shell and port connections to a Go agent in the guest over vsock. The guest image is built reproducibly from one Dockerfile with pinned versions; the kernel and Docker downloads are sha256-checked.</p>
+  <p><a href="{{ $gh }}/blob/main/README.md#how-it-works">Full architecture →</a></p>
+</section>
+
+</main>
+{{- end }}
