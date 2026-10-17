@@ -1,8 +1,8 @@
 # dockma
 
-Lightweight Docker on macOS.
+Lightweight tool for running Docker on macOS.
 
-## About
+## tl;dr
 
 dockma boots a minimal Linux VM with Apple's Virtualization.framework and runs the Docker Engine inside it. The macOS `docker` CLI talks to it through a Unix socket, and a launchd job keeps it running in the background. Your home directory is shared into the VM.
 
@@ -55,6 +55,33 @@ dockma boots a minimal Linux VM with Apple's Virtualization.framework and runs t
 
 ## Quick start
 
+### From a release
+
+Each [release](../../releases) has three files:
+- `dockma-<version>-macos-arm64.tar.gz`: the signed `dockma` binary;
+- `dockma-guest-<version>.tar.gz`: the guest kernel, initramfs and `guest-protocol`, built for that version's protocol;
+- `SHA256SUMS`.
+
+The CLI and the guest come from the same tag; use both from one release. With the three files in the current directory:
+
+```sh
+shasum -a 256 -c SHA256SUMS
+# Only for files downloaded with a browser: macOS kills a quarantined,
+# unnotarized binary at launch.
+xattr -d com.apple.quarantine dockma-*.tar.gz
+
+mkdir -p ~/.local/bin ~/.dockma/guest
+tar -xzf dockma-*-macos-arm64.tar.gz -C ~/.local/bin dockma
+tar -xzf dockma-guest-*.tar.gz -C ~/.dockma/guest
+
+dockma start
+docker context use dockma
+```
+
+The binary is ad-hoc signed, not notarized. `curl` doesn't quarantine what it downloads, so the `xattr` step isn't needed then. `gh attestation verify <file> --repo <owner>/dockma` checks that a tarball was built by this repository's release workflow.
+
+### From source
+
 ```sh
 # 1. Build the guest kernel and initramfs (needs an existing arm64 Docker engine)
 make guest
@@ -93,6 +120,7 @@ dockma logs --docker [-n N] [-f]  dockerd's log
 dockma logs --daemon [-n N] [-f]  Log of the host-side daemon (VM lifecycle, port forwards)
 dockma config [options]           Show or change settings (applied on next start)
 dockma delete [-f]                Delete the data disk (all images, containers, volumes), config and logs
+dockma --version                  Print the version
 ```
 
 Example:
@@ -278,7 +306,19 @@ scripts/bench.sh          boot, network and disk benchmark (restarts the VM)
 scripts/bench-build-steps.py  per-step build times and extracted layers, for bench.sh
 site/                     website (Hugo): templates, data, fonts; deployed to GitHub Pages by .github/workflows/pages.yml
 scripts/site-prepare.py   derives the site's version facts (vm/Dockerfile) and command reference (docc file)
+scripts/release-notes.py  prints a version's CHANGELOG.md section, for release.yml
+.github/workflows/        cli.yml, guest.yml (CI builds and tests), release.yml (drafts a release from a tag), pages.yml
 ```
+
+### Releases
+
+CI builds each half on pushes to `main` and pull requests that touch it:
+- `cli.yml` runs `make test` and builds the signed release binary on GitHub's `xcode-27` runner (Xcode 27.1, Swift 6.4). It also fails if the committed docc reference is stale.
+- `guest.yml` runs `make guest` on an arm64 Ubuntu runner, with a BuildKit cache.
+
+Pushing a version tag (`0.2.0`, no `v`) runs `release.yml`. It rebuilds both from the tag without a cache, and drafts a GitHub release with the tarballs, `SHA256SUMS` and build provenance attestations. The notes are the tag's `CHANGELOG.md` section, and the workflow fails without one. Publish the draft by hand. For a tag pushed before `release.yml` existed, run the workflow manually with that tag.
+
+The workflows don't run `make e2e`: hosted macOS runners can't start a VM.
 
 ## Troubleshooting
 

@@ -7,6 +7,7 @@ struct Dockma: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "dockma",
         abstract: "Lightweight Docker on macOS",
+        version: DockmaVersion.current,
         subcommands: [Start.self, Stop.self, Restart.self, Status.self, ShellCommand.self, Logs.self, ConfigCommand.self, Delete.self, DaemonCommand.self])
 }
 

@@ -7,6 +7,8 @@ DOCKER ?= docker
 PREFIX ?= $(HOME)/.local
 BIN = $(shell swift build -c $(CONFIGURATION) --show-bin-path 2>/dev/null)/dockma
 GUEST_DIR := $(HOME)/.dockma/guest
+# Extra `docker buildx build` flags for `make guest`; CI passes its build cache.
+BUILDX_FLAGS ?=
 
 .PHONY: build install test guest install-guest e2e site site-serve clean
 
@@ -32,7 +34,7 @@ test:
 # Builds kernel + initramfs in a Linux container (any arm64 Docker works,
 # including dockma itself once it is running).
 guest:
-	$(DOCKER) buildx build --platform linux/arm64 --output type=local,dest=vm/out vm
+	$(DOCKER) buildx build --platform linux/arm64 $(BUILDX_FLAGS) --output type=local,dest=vm/out vm
 
 install-guest: vm/out/Image vm/out/initramfs.cpio.lz4 vm/out/guest-protocol
 	mkdir -p $(GUEST_DIR)

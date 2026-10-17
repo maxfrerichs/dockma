@@ -5,8 +5,13 @@
 Lightweight Docker on macOS
 
 ```
-dockma [--help]
+dockma [--version] [--help]
 ```
+
+**--version:**
+
+*Show the version.*
+
 
 **--help:**
 
@@ -18,12 +23,17 @@ dockma [--help]
 Start the VM in the background (via launchd).
 
 ```
-dockma start [--timeout=<timeout>] [--help]
+dockma start [--timeout=<timeout>] [--version] [--help]
 ```
 
 **--timeout=\<timeout\>:**
 
 *Seconds to wait for Docker to answer.*
+
+
+**--version:**
+
+*Show the version.*
 
 
 **--help:**
@@ -38,8 +48,13 @@ dockma start [--timeout=<timeout>] [--help]
 Shut the VM down gracefully.
 
 ```
-dockma stop [--help]
+dockma stop [--version] [--help]
 ```
+
+**--version:**
+
+*Show the version.*
+
 
 **--help:**
 
@@ -53,12 +68,17 @@ dockma stop [--help]
 Stop and start the VM.
 
 ```
-dockma restart [--timeout=<timeout>] [--help]
+dockma restart [--timeout=<timeout>] [--version] [--help]
 ```
 
 **--timeout=\<timeout\>:**
 
 *Seconds to wait for Docker to answer.*
+
+
+**--version:**
+
+*Show the version.*
 
 
 **--help:**
@@ -73,12 +93,17 @@ dockma restart [--timeout=<timeout>] [--help]
 Show whether the VM is running.
 
 ```
-dockma status [--json] [--help]
+dockma status [--json] [--version] [--help]
 ```
 
 **--json:**
 
 *Print JSON.*
+
+
+**--version:**
+
+*Show the version.*
 
 
 **--help:**
@@ -93,7 +118,7 @@ dockma status [--json] [--help]
 Open a root shell in the VM, or run a command there.
 
 ```
-dockma shell [--tty] [--no-tty] [<command>...] [--help]
+dockma shell [--tty] [--no-tty] [<command>...] [--version] [--help]
 ```
 
 Without a command, opens an interactive login shell. With `-- <command>`, runs the command, passes stdin/stdout/stderr through and exits with its exit code. Works even when dockerd is down.
@@ -113,6 +138,11 @@ Without a command, opens an interactive login shell. With `-- <command>`, runs t
 *Command to run instead of a shell (after --).*
 
 
+**--version:**
+
+*Show the version.*
+
+
 **--help:**
 
 *Show help information.*
@@ -125,7 +155,8 @@ Without a command, opens an interactive login shell. With `-- <command>`, runs t
 Show VM logs (kernel and init by default).
 
 ```
-dockma logs [--docker] [--daemon] [--follow] [--lines=<lines>] [--help]
+dockma logs [--docker] [--daemon] [--follow] [--lines=<lines>] [--version]
+  [--help]
 ```
 
 **--docker:**
@@ -148,6 +179,11 @@ dockma logs [--docker] [--daemon] [--follow] [--lines=<lines>] [--help]
 *Number of lines to show.*
 
 
+**--version:**
+
+*Show the version.*
+
+
 **--help:**
 
 *Show help information.*
@@ -162,7 +198,7 @@ Show or change VM settings (applied on the next start).
 ```
 dockma config [--cpus=<cpus>] [--memory=<memory>] [--disk=<disk>]
   [--port-bind-address=<port-bind-address>] [--rosetta=<rosetta>]
-  [--autostart=<autostart>] [--help]
+  [--autostart=<autostart>] [--version] [--help]
 ```
 
 **--cpus=\<cpus\>:**
@@ -195,6 +231,11 @@ dockma config [--cpus=<cpus>] [--memory=<memory>] [--disk=<disk>]
 *Start dockma at login (true/false).*
 
 
+**--version:**
+
+*Show the version.*
+
+
 **--help:**
 
 *Show help information.*
@@ -207,12 +248,17 @@ dockma config [--cpus=<cpus>] [--memory=<memory>] [--disk=<disk>]
 Delete the VM's data disk (all images, containers and volumes), config and logs.
 
 ```
-dockma delete [--force] [--help]
+dockma delete [--force] [--version] [--help]
 ```
 
 **--force:**
 
 *Don't ask for confirmation.*
+
+
+**--version:**
+
+*Show the version.*
 
 
 **--help:**
@@ -227,8 +273,13 @@ dockma delete [--force] [--help]
 Run the VM in the foreground (launchd runs this).
 
 ```
-dockma daemon [--help]
+dockma daemon [--version] [--help]
 ```
+
+**--version:**
+
+*Show the version.*
+
 
 **--help:**
 
@@ -242,10 +293,15 @@ dockma daemon [--help]
 Show subcommand help information.
 
 ```
-dockma help [<subcommands>...]
+dockma help [<subcommands>...] [--version]
 ```
 
 **subcommands:**
+
+
+**--version:**
+
+*Show the version.*
 
 
 

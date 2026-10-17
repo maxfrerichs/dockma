@@ -1,0 +1,109 @@
+# Tests the Swift CLI and builds the signed release binary as a tarball
+# artifact. release.yml calls this with a version and the tag to build.
+name: cli
+
+on:
+  push:
+    branches: [main]
+    paths: &paths
+      - Sources/**
+      - Tests/**
+      - Package.swift
+      - Package.resolved
+      - Makefile
+      - dockma.entitlements
+      - vm/agent/protocol # GuestImageTests compares it with GuestImage.protocolVersion
+      - .github/workflows/cli.yml
+  pull_request:
+    paths: *paths
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      version:
+        description: Version that names the tarball
+        type: string
+        required: true
+      ref:
+        description: Git ref to build
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  # Pinned, not the image default: Package.swift needs Swift 6.4.
+  DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
+
+jobs:
+  build:
+    # Public preview image (macOS 27, arm64). macos-26 lacks Swift 6.4.
+    runs-on: xcode-27
+    # swift-package can linger for a long time after it finishes on macOS
+    # 27.0.1 (see CLAUDE.md); fail rather than burn hours.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - name: Check toolchain
+        run: |
+          swift --version
+          swift --version 2>&1 | grep -q 'Swift version 6\.4' || { echo "::error::Swift 6.4 required"; exit 1; }
+      - name: Test
+        run: make test
+      - name: Build release binary
+        run: make build CONFIGURATION=release
+      - name: Check binary
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          bin="$(swift build -c release --show-bin-path)/dockma"
+          lipo -archs "$bin"
+          codesign --display --entitlements - --xml "$bin" | grep -q com.apple.security.virtualization \
+            || { echo "::error::binary lacks the virtualization entitlement"; exit 1; }
+          "$bin" --help >/dev/null
+          # A release binary must report its tag (DockmaVersion.current).
+          actual="$("$bin" --version)"
+          if [ -n "$VERSION" ] && [ "$actual" != "$VERSION" ]; then
+            echo "::error::dockma --version prints '$actual', the tag is '$VERSION'"
+            exit 1
+          fi
+      - name: Package
+        id: package
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          version="${VERSION:-${GITHUB_SHA::12}}"
+          name="dockma-${version}-macos-arm64.tar.gz"
+          mkdir -p dist
+          cp "$(swift build -c release --show-bin-path)/dockma" LICENSE dist/
+          # A tarball keeps the executable bit, which artifact uploads drop.
+          tar -czf "$name" -C dist dockma LICENSE
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: cli
+          path: ${{ steps.package.outputs.name }}
+          if-no-files-found: error
+
+  # The committed command reference must match the ArgumentParser
+  # definitions. Kept out of release builds so a stuck swift-package can't
+  # hold up a release.
+  docs:
+    if: ${{ !inputs.version }}
+    runs-on: xcode-27
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Regenerate the docc reference
+        run: swift package --allow-writing-to-package-directory generate-docc-reference
+      - name: Check it is committed
+        run: |
+          if git status --porcelain -- Sources/DockmaCLI/DockmaCLI.docc | grep .; then
+            echo "::error::DockmaCLI.docc is stale; run swift package --allow-writing-to-package-directory generate-docc-reference"
+            exit 1
+          fi
