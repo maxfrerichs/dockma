@@ -9,4 +9,32 @@ if [ -e /run/dockma-disk-failed ]; then
 	echo "dockerd not started: data disk failed: $(cat /run/dockma-disk-failed)" >/dev/hvc1
 	exec sleep 3600
 fi
-dockerd --config-file /etc/docker/daemon.json 2>&1 | cat >/dev/hvc1
+
+# Containers inherit this limit through containerd; init's is 1024/4096.
+# shellcheck disable=SC3045 # busybox ash has ulimit -n
+ulimit -n 1048576
+
+# The configuration: the baked daemon.json plus the user's daemon.json from
+# the state directory and dockma's defaults (dockma-agent daemon-config).
+# The lease's gateway is normally known by now; wait briefly if it isn't.
+i=0
+while [ ! -s /run/dockma/gateway ] && [ $i -lt 5 ]; do
+	sleep 1
+	i=$((i + 1))
+done
+state=$(cat /run/dockma/state 2>/dev/null)
+config=/etc/docker/daemon.json
+generated=/run/dockma/daemon.json
+user="${state:-/nonexistent}/daemon.json"
+if dockma-agent daemon-config /etc/docker/daemon.json "$user" /run/dockma/gateway "$generated" 2>/dev/hvc1; then
+	# Only a user's daemon.json can make it invalid; validating costs a
+	# dockerd start, which every boot would otherwise pay.
+	if [ ! -f "$user" ]; then
+		config=$generated
+	elif problem=$(dockerd --validate --config-file "$generated" 2>&1); then
+		config=$generated
+	else
+		echo "dockma: using the default dockerd configuration; $user: $problem" >/dev/hvc1
+	fi
+fi
+dockerd --config-file "$config" 2>&1 | cat >/dev/hvc1

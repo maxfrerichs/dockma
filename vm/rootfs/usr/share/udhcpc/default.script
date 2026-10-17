@@ -1,20 +1,62 @@
 #!/bin/sh
 # udhcpc hook: apply the lease from Virtualization.framework's NAT DHCP server.
+# It also records the lease's router (the Mac) and DNS servers in /run/dockma,
+# where dockma-agent's DNS forwarder and dockerd's generated config read them,
+# and points resolv.conf at that forwarder: the VM's own address, port 53,
+# which an nftables redirect sends to the agent on port 10053. Port 53 itself
+# stays free for containers that publish it.
+# udhcpc passes the lease in the environment: interface, ip, mask, router, dns.
+# shellcheck disable=SC2154
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+state=/run/dockma
+# The agent's DNS port (dnsListenAddress in vm/agent/dns.go).
+dns_port=10053
+
+# write <file> <content>: replaces file in one step, so readers never see it
+# empty or half written.
+write() { printf '%s\n' "$2" >"$1.tmp" && mv "$1.tmp" "$1"; }
+
 case "$1" in
 deconfig)
 	ip -4 addr flush dev "$interface"
 	ip link set "$interface" up
 	;;
 bound | renew)
-	ip -4 addr flush dev "$interface"
-	ip addr add "$ip/${mask:-24}" dev "$interface"
+	# A renewal normally keeps the address. Removing and re-adding it would
+	# drop the default route and the NAT state of every container
+	# connection, so the address is only touched when it changed.
+	cidr="$ip/${mask:-24}"
+	if ! ip -4 addr show dev "$interface" | grep -qF "inet $cidr "; then
+		ip -4 addr flush dev "$interface"
+		ip addr add "$cidr" dev "$interface"
+	fi
 	if [ -n "$router" ]; then
 		ip route replace default via "${router%% *}" dev "$interface"
 	fi
-	: >/etc/resolv.conf
-	for ns in $dns; do
-		echo "nameserver $ns" >>/etc/resolv.conf
-	done
+	mkdir -p "$state"
+	write "$state/gateway" "${router%% *}"
+	write "$state/upstream-dns" "$dns"
+	# DNS queries to this address, from containers (prerouting, not from
+	# other machines on eth0) and from the VM itself (output), go to the
+	# agent. Recreated on each lease, so it follows an address change. It
+	# runs before Docker's port mappings, so a container that publishes
+	# port 53 gets queries from the Mac and the network, but not those other
+	# containers send to this address.
+	nft -f - <<EOF || echo "dockma: cannot install the DNS redirect" >&2
+table ip dockma_dns
+delete table ip dockma_dns
+table ip dockma_dns {
+	chain prerouting {
+		type nat hook prerouting priority dstnat - 10;
+		iifname != "$interface" ip daddr $ip meta l4proto { tcp, udp } th dport 53 redirect to :$dns_port
+	}
+	chain output {
+		type nat hook output priority -110;
+		ip daddr $ip meta l4proto { tcp, udp } th dport 53 redirect to :$dns_port
+	}
+}
+EOF
+	write /etc/resolv.conf "nameserver $ip"
 	;;
 esac
 exit 0

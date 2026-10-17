@@ -1,7 +1,9 @@
 // dockma-agent runs inside the dockma VM. It serves three vsock ports for the
 // macOS host: a byte proxy to dockerd's socket, TCP and UDP tunnels for
 // published container ports, and shell sessions. It also dials the host's
-// JSON-lines control port, so the host learns the moment the agent is up.
+// JSON-lines control port, so the host learns the moment the agent is up,
+// and serves DNS for containers (dns.go). `dockma-agent daemon-config`
+// writes dockerd's configuration instead (daemonconfig.go).
 package main
 
 import (
@@ -15,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -26,7 +29,7 @@ import (
 )
 
 const (
-	version = "0.5.0"
+	version = "0.6.0"
 
 	dockerPort  = 1024
 	controlPort = 1025
@@ -34,12 +37,20 @@ const (
 	shellPort   = 1027
 
 	dockerSocket = "/var/run/docker.sock"
+	// dataRoot is where the data disk is mounted.
+	dataRoot = "/var/lib/docker"
 )
 
 func main() {
 	log.SetFlags(0)
 	log.SetPrefix("dockma-agent: ")
+	if len(os.Args) > 1 && os.Args[1] == "daemon-config" {
+		os.Exit(runDaemonConfig(os.Args[2:]))
+	}
+	raiseFileLimit()
 
+	go serveDNS(newDNSForwarder())
+	go trimDataDisk()
 	ports := newPortWatcher()
 	go ports.run(context.Background())
 
@@ -70,7 +81,48 @@ func dialControl(ports *portWatcher) {
 	}
 }
 
-// serve accepts vsock connections on port forever, one goroutine each.
+// raiseFileLimit lifts the descriptor limit from init's 1024/4096, since
+// every tunnelled or proxied connection takes two.
+func raiseFileLimit() {
+	limit := syscall.Rlimit{Cur: 1 << 20, Max: 1 << 20}
+	if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &limit); err != nil {
+		log.Printf("raise file limit: %v", err)
+	}
+}
+
+// trimDataDisk hands the data disk's free blocks back to the Mac every hour,
+// starting a minute after boot: the image file on the host is sparse and
+// otherwise only ever grows. Deleted images and containers free blocks that
+// ext4 only reports with a discard.
+func trimDataDisk() {
+	time.Sleep(time.Minute)
+	var lastErr string
+	for {
+		if err := exec.Command("mountpoint", "-q", dataRoot).Run(); err == nil {
+			if out, err := exec.Command("fstrim", dataRoot).CombinedOutput(); err != nil {
+				if msg := strings.TrimSpace(string(out)); msg != lastErr {
+					log.Printf("fstrim %s: %v: %s", dataRoot, err, msg)
+					lastErr = msg
+				}
+			} else {
+				lastErr = ""
+			}
+		}
+		time.Sleep(time.Hour)
+	}
+}
+
+// isHostPeer reports whether a vsock connection comes from the macOS host.
+// Anything else is a process in the VM, such as a container allowed to open
+// AF_VSOCK sockets (privileged, or without seccomp), which must not get a
+// root shell or the docker socket through the agent.
+func isHostPeer(addr net.Addr) bool {
+	a, ok := addr.(*vsock.Addr)
+	return ok && a.ContextID == vsock.Host
+}
+
+// serve accepts vsock connections from the host on port forever, one
+// goroutine each.
 func serve(port uint32, handle func(net.Conn)) {
 	for {
 		l, err := vsock.Listen(port, nil)
@@ -84,6 +136,11 @@ func serve(port uint32, handle func(net.Conn)) {
 			if err != nil {
 				log.Printf("accept vsock:%d: %v", port, err)
 				break
+			}
+			if !isHostPeer(c.RemoteAddr()) {
+				log.Printf("vsock:%d: refused connection from %v", port, c.RemoteAddr())
+				c.Close()
+				continue
 			}
 			go handle(c)
 		}

@@ -20,13 +20,15 @@ ln -sf /proc/self/fd /dev/fd
 ln -sf /proc/self/fd/0 /dev/stdin
 ln -sf /proc/self/fd/1 /dev/stdout
 ln -sf /proc/self/fd/2 /dev/stderr
-mkdir -p /var/run /var/lib/docker
+mkdir -p /var/run /var/lib/docker /run/dockma
 hostname dockma
 
 sysctl -q -w net.ipv4.ip_forward=1
 sysctl -q -w net.ipv6.conf.all.forwarding=1
 sysctl -q -w fs.inotify.max_user_watches=524288
 sysctl -q -w fs.inotify.max_user_instances=8192
+# Elasticsearch, OpenSearch and SonarQube refuse to start below this.
+sysctl -q -w vm.max_map_count=262144
 
 ip link set lo up
 ip link set eth0 up
@@ -45,13 +47,36 @@ else
 fi
 mark "data disk ready"
 
+# cmdline_path <name>: the percent-encoded path in `dockma.<name>=` on the
+# kernel command line, decoded; empty if absent.
+cmdline_path() {
+	value=$(sed -n "s/.*dockma\\.$1=\\([^ ]*\\).*/\\1/p" /proc/cmdline)
+	[ -n "$value" ] && printf "$(echo "$value" | sed 's/%/\\x/g')"
+}
+
 # The host home directory is mounted at the same path it has on the host so
-# bind mounts like `-v $PWD:/src` resolve. The path is percent-encoded.
-home=$(sed -n 's/.*dockma\.home=\([^ ]*\).*/\1/p' /proc/cmdline)
+# bind mounts like `-v $PWD:/src` resolve.
+home=$(cmdline_path home)
 if [ -n "$home" ]; then
-	home=$(printf "$(echo "$home" | sed 's/%/\\x/g')")
 	mkdir -p "$home"
 	mount -t virtiofs home "$home" || log "home share not mounted"
+fi
+
+# The state directory (~/.dockma or DOCKMA_HOME) holds the user's guest
+# overrides. The guest sees it only when it lies under the home share.
+state=$(cmdline_path state)
+[ -n "$state" ] || state="$home/.dockma"
+echo "$state" >/run/dockma/state
+# Extra CA certificates, e.g. for a TLS-intercepting proxy: added to the
+# system bundle that dockerd uses for registries.
+for cert in "$state"/ca-certificates/*.crt; do
+	[ -f "$cert" ] || continue
+	{ echo; cat "$cert"; } >>/etc/ssl/certs/ca-certificates.crt && log "added CA certificate $cert"
+done
+# Per-registry certificates, in Docker's certs.d layout.
+if [ -d "$state/certs.d" ]; then
+	mkdir -p /etc/docker
+	ln -sfn "$state/certs.d" /etc/docker/certs.d
 fi
 
 # Rosetta runs x86_64 binaries. The F flag opens the interpreter now, so it

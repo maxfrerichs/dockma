@@ -6,6 +6,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/mdlayher/vsock"
 )
 
 // The host (AgentMessage in Swift) decodes these exact shapes.
@@ -77,5 +79,19 @@ func TestHandleControlSendsChangesOnly(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("handleControl did not return after the host closed")
+	}
+}
+
+func TestOnlyTheHostIsAPeer(t *testing.T) {
+	if !isHostPeer(&vsock.Addr{ContextID: vsock.Host, Port: 1234}) {
+		t.Error("host refused")
+	}
+	for _, cid := range []uint32{vsock.Hypervisor, vsock.Local, 3, 42} {
+		if isHostPeer(&vsock.Addr{ContextID: cid, Port: 1234}) {
+			t.Errorf("CID %d admitted", cid)
+		}
+	}
+	if isHostPeer(&net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1}) {
+		t.Error("non-vsock address admitted")
 	}
 }
