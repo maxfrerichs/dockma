@@ -8,6 +8,7 @@ on:
     paths:
       - site/**
       - scripts/site-prepare.py
+      - install.sh
       - vm/Dockerfile
       - Sources/DockmaCLI/DockmaCLI.docc/**
       - .github/workflows/pages.yml

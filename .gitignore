@@ -12,4 +12,5 @@ vm/out/
 /site/resources/
 /site/data/facts.json
 /site/content/reference/
+/site/static/install.sh
 .hugo_build.lock

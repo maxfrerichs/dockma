@@ -1,0 +1,7 @@
+{{- /* Renders a list of command lines (a data/*.yaml file); "#" starts a comment, wrapped in span.c (the copy button drops those). "{installURL}" becomes the site's install.sh. */ -}}
+{{- $installURL := "install.sh" | absURL -}}
+{{- range $i, $line := . -}}
+{{- if $i }}
+{{ end -}}
+{{- replace $line "{installURL}" $installURL | htmlEscape | replaceRE `(#.*)$` `<span class="c">$1</span>` | safeHTML -}}
+{{- end -}}

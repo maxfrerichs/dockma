@@ -66,6 +66,8 @@ p { margin: 0 0 12px; }
 
 /* Hero */
 .hero { padding: 48px 0 40px; display: grid; gap: 24px; align-items: end; }
+/* Lets the text column shrink below the install command's width; the command scrolls. */
+.hero > div { min-width: 0; }
 .whale {
   color: var(--accent);
   font-size: clamp(11px, 3.2vw, 16px);
@@ -154,6 +156,15 @@ p { margin: 0 0 12px; }
 .copy:hover { background: var(--code-ink); color: var(--code-bg); }
 .copy + pre { padding-top: 40px; }
 .note { color: var(--muted); font-size: 13px; }
+.sub { font-weight: 800; font-size: 15px; margin: 28px 0 12px; }
+h2 + .sub { margin-top: 0; }
+
+/* Hero install one-liner: the copy button sits beside the command. */
+.code.install { display: flex; align-items: stretch; margin: 0 0 10px; }
+/* Wraps instead of scrolling, so the whole command, "| sh" included, is visible. */
+.code.install pre { flex: 1; min-width: 0; padding: 12px 16px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.code.install .copy { position: static; flex: none; padding: 0 16px; }
+.install-note { color: var(--muted); font-size: 13px; margin: 0 0 24px; }
 
 /* Footer */
 footer { border-top: 2px solid var(--rule); padding: 32px 0 48px; font-size: 13px; }

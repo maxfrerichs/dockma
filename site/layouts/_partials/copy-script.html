@@ -1,10 +1,12 @@
 <script>
 document.querySelectorAll("[data-copy]").forEach(function (button) {
   button.addEventListener("click", function () {
-    // Copy only the commands: zsh rejects # comments at the prompt by default.
+    // Copy only the commands: zsh rejects # comments at the prompt by default,
+    // and the "$ " prompt (span.p) is not part of the command.
     var block = document.getElementById(button.dataset.copy).cloneNode(true);
-    block.querySelectorAll(".c").forEach(function (comment) { comment.remove(); });
-    var text = block.textContent.split("\n")
+    block.querySelectorAll(".c, .p").forEach(function (comment) { comment.remove(); });
+    // Non-breaking spaces keep "| sh" on one line; a shell needs real spaces.
+    var text = block.textContent.replace(/\u00a0/g, " ").split("\n")
       .map(function (line) { return line.trimEnd(); })
       .filter(function (line) { return line !== ""; })
       .join("\n") + "\n";

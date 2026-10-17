@@ -1,0 +1,8 @@
+# Lines starting with "#" are rendered as comments and left out of the copy button.
+- "# 1. Install the dockma CLI and its Linux guest from the latest release"
+- "curl -fsSL {installURL} | sh"
+- ""
+- "# 2. Start the VM and point the docker CLI at it"
+- "dockma start"
+- "docker context use dockma"
+- "docker run --rm hello-world"

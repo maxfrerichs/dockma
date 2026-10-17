@@ -4,6 +4,10 @@ All notable changes to dockma are recorded here. The format follows [Keep a Chan
 
 ## Unreleased
 
+### Added
+- `install.sh` installs the newest release: `curl -fsSL https://maxfrerichs.github.io/dockma/install.sh | sh`. It checks the CLI tarball against the release's `SHA256SUMS`, and against its build provenance attestation when a logged-in `gh` is available. It then fetches the matching guest with the new binary's `dockma install` and installs `dockma` to `~/.local/bin`; a failed guest download leaves the existing installation alone. It installs 0.3.0 or later. `DOCKMA_VERSION`, `DOCKMA_INSTALL_DIR`, `DOCKMA_SKIP_GUEST` and `DOCKMA_RELEASE_URL` adjust it.
+- The website shows the install command in its header and in the quick start, next to the build from source.
+
 ## 0.3.0 – 2026-10-17
 
 ### Added

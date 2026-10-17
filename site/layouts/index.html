@@ -12,19 +12,27 @@
   </div>
 </header>
 
-<p class="status"><strong>Status:</strong> early &amp; experimental · Apple Silicon only · tested on macOS 27</p>
+<p class="status"><strong>Status:</strong> early development · Apple Silicon only · tested on macOS 27</p>
 
 <main>
-
+<section>
+      <div class="code install">
+<pre id="install-hero"><span class="p">$ </span>curl -fsSL {{ "install.sh" | absURL }}&nbsp;|&nbsp;sh</pre>
+      <button class="copy" type="button" data-copy="install-hero">copy</button>
+    </div>
+    <p class="install-note">Installs the latest release to <code>~/.local/bin</code>, checksum-verified. <a href="{{ $gh }}/blob/main/install.sh">Read the script</a> before you run it.</p>
+</section>
 <section aria-labelledby="what">
   <h2 id="what">tl;dr</h2>
-  <p>dockma boots a minimal Linux VM with Apple's Virtualization.framework and runs the Docker Engine inside it. The macOS <code>docker</code> CLI talks to it through a Unix socket. A launchd job keeps it running in the background.</p>
+  <p>dockma boots a minimal Linux VM with Apple's Virtualization.framework and runs a stripped-down Linux distribution with Docker Engine inside it. The macOS <code>docker</code> CLI communicates to the engine through a Unix socket. A launchd job keeps it running in the background.</p>
 </section>
 
 <section aria-labelledby="why">
-  <h2 id="why">Docker on a Mac, without Docker Desktop</h2>
-  <p>dockma is a Docker <em>engine</em> for Apple Silicon Macs, an alternative to running the engine through Docker Desktop, Lima or Colima. You keep using the regular <code>docker</code> CLI; dockma only provides the engine behind it.</p>
-  <p>It is early and experimental: Apple Silicon only, and tested on macOS 27 so far. See the <a href="{{ $gh }}/blob/main/README.md#limitations">known limitations</a> before relying on it.</p>
+  <h2 id="why">Docker on a Mac, without the hassle.</h2>
+  <p>dockma is a Docker <em>runtime</em> for Apple Silicon Macs, an alternative to running the engine through Docker Desktop, Colima or OrbStack. You keep using the <code>docker</code> CLI on your host; dockma only provides the engine behind it.</p>
+  <p>It is currently in early development : Apple Silicon only, and tested on macOS 27 so far. See the <a href="{{ $gh }}/blob/main/README.md#limitations">known limitations</a> before relying on it.</p>
+  <p>Feel free to install, daily-drive and report issues, but if you need a battle-tested, production-ready alternative, consider <a href="https://github.com/abiosoft/colima">Colima</a>.</p>
+
 </section>
 
 <section aria-labelledby="features">
@@ -43,11 +51,19 @@
 
 <section aria-labelledby="quick-start">
   <h2 id="quick-start">Quick start</h2>
+  <h3 class="sub">Install a release</h3>
+  <div class="code">
+    <button class="copy" type="button" data-copy="install">copy</button>
+<pre id="install">{{ partial "commands.html" hugo.Data.install }}</pre>
+  </div>
+  <p class="note">Needs an Apple Silicon Mac with macOS 14 or later and the <code>docker</code> CLI (<code>brew install docker</code>). The <a href="{{ $gh }}/blob/main/install.sh">script</a> checks the download against the release's <code>SHA256SUMS</code> (and its build attestation, if <code>gh</code> is logged in), installs <code>dockma</code> to <code>~/.local/bin</code> and fetches the matching Linux guest. Set <code>DOCKMA_VERSION</code> to pin a release or <code>DOCKMA_INSTALL_DIR</code> to install elsewhere. Optional: Rosetta for amd64 images. If <code>DOCKER_HOST</code> is set (Lima does this), it overrides the context.</p>
+
+  <h3 class="sub">From source</h3>
   <div class="code">
     <button class="copy" type="button" data-copy="quickstart">copy</button>
-<pre id="quickstart">{{ partial "quickstart.html" . }}</pre>
+<pre id="quickstart">{{ partial "commands.html" hugo.Data.quickstart }}</pre>
   </div>
-  <p class="note">Needs an Apple Silicon Mac, Xcode with Swift 6.4, the <code>docker</code> CLI (<code>brew install docker</code>), and any arm64 Docker engine with buildx for the first guest build. Optional: Rosetta for amd64 images. If <code>DOCKER_HOST</code> is set (Lima does this), it overrides the context.</p>
+  <p class="note">Also needs Xcode with Swift 6.4, and any arm64 Docker engine with buildx for the first guest build.</p>
 </section>
 
 <section aria-labelledby="status-demo">

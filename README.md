@@ -57,6 +57,28 @@ dockma boots a minimal Linux VM with Apple's Virtualization.framework and runs t
 
 ## Quick start
 
+### With the install script
+
+```sh
+curl -fsSL https://maxfrerichs.github.io/dockma/install.sh | sh
+dockma start
+docker context use dockma
+```
+
+[`install.sh`](install.sh) does the steps of [From a release](#from-a-release) for you:
+1. It downloads `dockma-<version>-macos-arm64.tar.gz` from the newest release and checks it against that release's `SHA256SUMS`.
+2. If `gh` is installed and logged in, it also checks the tarball's build provenance attestation and aborts if that fails.
+3. It fetches the matching guest with the new binary's `dockma install`, then installs `dockma` to `~/.local/bin`. If the guest download fails, the installed binary and guest are left as they were.
+
+It doesn't start the VM or edit your shell profile, and it tells you when `~/.local/bin` isn't on your `PATH`. Run it again to upgrade; if a VM is running, it tells you to `dockma restart`. The site serves a copy of the script in this repository.
+
+| Variable | Effect |
+|---|---|
+| `DOCKMA_VERSION` | Install this release instead of the newest. 0.3.0 or later: older releases lack `dockma install`. |
+| `DOCKMA_INSTALL_DIR` | Install the binary here instead of `~/.local/bin` |
+| `DOCKMA_SKIP_GUEST=1` | Install only the CLI; run `dockma install` later |
+| `DOCKMA_RELEASE_URL` | Read the release assets from this directory (a URL or an absolute path) instead of GitHub. Needs `DOCKMA_VERSION`; `dockma install` reads it too. |
+
 ### From a release
 
 Each [release](../../releases) has three files:

@@ -3,8 +3,9 @@
 
 Usage: python3 -I scripts/site-prepare.py <repo-root>
 
-Writes site/data/facts.json (pinned versions from vm/Dockerfile) and
-site/content/reference/*.md (one page per command in the docc reference).
+Writes site/data/facts.json (pinned versions from vm/Dockerfile),
+site/content/reference/*.md (one page per command in the docc reference) and
+site/static/install.sh (a copy of the repo's install.sh, served by the site).
 Fails loudly when an expected input is missing, so the site can't go blank.
 """
 import json
@@ -65,12 +66,18 @@ def write_reference(root: Path) -> None:
     )
 
 
+def copy_installer(root: Path) -> None:
+    """Copies install.sh into site/static/, so the site serves it at /install.sh."""
+    shutil.copyfile(root / "install.sh", root / "site/static/install.sh")
+
+
 def main() -> None:
     if len(sys.argv) != 2:
         sys.exit(__doc__)
     root = Path(sys.argv[1]).resolve()
     write_facts(root)
     write_reference(root)
+    copy_installer(root)
 
 
 if __name__ == "__main__":
