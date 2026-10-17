@@ -1,6 +1,6 @@
 # dockma
 
-Lightweight tool for running Docker on macOS.
+Lightweight Docker on macOS, free and open source.
 
 ## tl;dr
 
