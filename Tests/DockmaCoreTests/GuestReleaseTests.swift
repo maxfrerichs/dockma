@@ -103,8 +103,10 @@ private let validGuest: [String: String?] = [
     try fixture.paths.createDirectories()
     try fixture.publish(validGuest)
     // flock locks belong to the open file, so a second open conflicts even
-    // within one process.
-    let fd = open(fixture.paths.guestInstallLock.path, O_RDWR | O_CREAT, 0o600)
+    // within one process. O_CLOEXEC, like the real lock: a subprocess that
+    // another test spawns meanwhile must not inherit the lock and keep it
+    // past close().
+    let fd = open(fixture.paths.guestInstallLock.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
     #expect(flock(fd, LOCK_EX | LOCK_NB) == 0)
     let error = #expect(throws: DockmaError.self) { try fixture.install() }
     #expect(error?.description.contains("another `dockma install` is running") == true)
