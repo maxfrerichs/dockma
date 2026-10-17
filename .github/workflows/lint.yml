@@ -1,0 +1,40 @@
+# Lints the workflows (actionlint, with .github/actionlint.yaml) and every
+# shell script: the installer, the dev scripts and the guest's boot scripts,
+# which run under busybox ash. Shellcheck fails on warnings, not on its
+# style notes.
+name: lint
+
+on:
+  push:
+    branches: [main]
+    paths: &paths
+      - .github/**
+      - install.sh
+      - scripts/*.sh
+      - vm/rootfs/**
+      - vm/kernel/*.sh
+      - vm/tests/*.sh
+  pull_request:
+    paths: *paths
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: actionlint
+        # rhysd/actionlint:1.7.12
+        run: docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
+      - name: shellcheck
+        # koalaman/shellcheck:v0.11.0
+        run: >-
+          docker run --rm -v "$PWD:/repo:ro" -w /repo
+          koalaman/shellcheck@sha256:bb596a0d169b85ddd81d8b6d3a2ff6d5baf5fca10b97f575ebc647c3dff62b3d
+          --shell=sh --severity=warning
+          install.sh scripts/*.sh vm/kernel/*.sh vm/tests/*.sh
+          vm/rootfs/init vm/rootfs/etc/init.d/* vm/rootfs/etc/profile
+          vm/rootfs/usr/libexec/* vm/rootfs/usr/share/udhcpc/default.script
