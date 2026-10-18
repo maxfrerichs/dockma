@@ -63,21 +63,6 @@ private final class FakeAgent: @unchecked Sendable {
     }
 }
 
-/// A UDP port on 127.0.0.1 that was free a moment ago.
-private func makeFreeUDPPort() throws -> UInt16 {
-    let fd = socket(AF_INET, SOCK_DGRAM, 0)
-    defer { close(fd) }
-    var addr = loopback(port: 0)
-    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-    let rc = withUnsafeMutablePointer(to: &addr) {
-        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-            bind(fd, $0, length) == 0 ? getsockname(fd, $0, &length) : -1
-        }
-    }
-    guard rc == 0 else { throw DockmaError("cannot find a free port") }
-    return UInt16(bigEndian: addr.sin_port)
-}
-
 /// `127.0.0.1:port`.
 private func loopback(port: UInt16) -> sockaddr_in {
     var addr = sockaddr_in()
@@ -133,16 +118,6 @@ private func receive(on client: Int32) async -> String? {
     }
 }
 
-/// Polls `condition` for up to `timeout`.
-private func eventually(within timeout: Duration = .seconds(3), _ condition: () -> Bool) async throws -> Bool {
-    let deadline = ContinuousClock.now + timeout
-    while ContinuousClock.now < deadline {
-        if condition() { return true }
-        try await Task.sleep(for: .milliseconds(20))
-    }
-    return condition()
-}
-
 /// Counts calls from any thread.
 private final class Counter: @unchecked Sendable {
     private let lock = NSLock()
@@ -157,7 +132,7 @@ private final class Counter: @unchecked Sendable {
 @Suite(.serialized) struct DatagramRelayTests {
     @Test func relayTunnelsEachClientAndKeepsDatagramsSentWhileConnecting() async throws {
         let agent = FakeAgent(connectDelay: .milliseconds(150))
-        let port = try makeFreeUDPPort()
+        let port = try makeFreePort()
         let relay = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "127.0.0.1:53") {
             try await agent.connect()
         }
@@ -179,7 +154,7 @@ private final class Counter: @unchecked Sendable {
 
     @Test func relayEndsIdleFlows() async throws {
         let agent = FakeAgent()
-        let port = try makeFreeUDPPort()
+        let port = try makeFreePort()
         var limits = DatagramRelay.Limits.standard
         limits.idleTimeout = .milliseconds(200)
         let relay = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1", limits: limits) {
@@ -200,7 +175,7 @@ private final class Counter: @unchecked Sendable {
 
     @Test func newClientAtTheLimitEndsTheLeastRecentlyActiveFlow() async throws {
         let agent = FakeAgent()
-        let port = try makeFreeUDPPort()
+        let port = try makeFreePort()
         var limits = DatagramRelay.Limits.standard
         limits.maxFlows = 2
         let relay = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1", limits: limits) {
@@ -230,7 +205,7 @@ private final class Counter: @unchecked Sendable {
 
     @Test func cancelledRelayClosesItsTunnels() async throws {
         let agent = FakeAgent()
-        let port = try makeFreeUDPPort()
+        let port = try makeFreePort()
         let relay = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1") {
             try await agent.connect()
         }
@@ -250,7 +225,7 @@ private final class Counter: @unchecked Sendable {
 
     @Test func connectFailureEndsTheFlow() async throws {
         let attempts = Counter()
-        let port = try makeFreeUDPPort()
+        let port = try makeFreePort()
         let relay = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1") {
             attempts.increment()
             throw DockmaError("no VM")
@@ -268,7 +243,7 @@ private final class Counter: @unchecked Sendable {
 
     @Test func relayDropsDatagramsBeyondTheByteBudget() async throws {
         let agent = FakeAgent(connectDelay: .milliseconds(300))
-        let port = try makeFreeUDPPort()
+        let port = try makeFreePort()
         var limits = DatagramRelay.Limits.standard
         limits.maxQueuedBytes = 100  // two 40-byte datagrams plus their 2-byte headers
         let relay = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1", limits: limits) {
@@ -293,7 +268,7 @@ private final class Counter: @unchecked Sendable {
     @Test func loopbackOnlyRelayDropsDatagramsFromOtherAddresses() async throws {
         let attempts = Counter()
         let agent = FakeAgent()
-        let port = try makeFreeUDPPort()
+        let port = try makeFreePort()
         let relay = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1",
                                       acceptsOnlyLoopback: true) {
             attempts.increment()
@@ -314,5 +289,73 @@ private final class Counter: @unchecked Sendable {
         #expect(await receive(on: remote) == nil)
         #expect(attempts.value == 1)
         #expect(relay.flowCount == 1)
+    }
+
+    /// Reply threads and connect tasks hold the relay while its flows run, so
+    /// it is freed only once `cancel()` has ended them.
+    @Test func cancelledRelayIsReleasedWithItsFlows() async throws {
+        let agent = FakeAgent()
+        let port = try makeFreePort()
+        var relay: DatagramRelay? = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1") {
+            try await agent.connect()
+        }
+        weak let weakRelay = relay
+        let first = makeClient(), second = makeClient()
+        defer { close(first); close(second) }
+        send("a", from: first, to: port)
+        #expect(await receive(on: first) == "echo:a")
+        send("b", from: second, to: port)
+        #expect(await receive(on: second) == "echo:b")
+        #expect(relay?.flowCount == 2)
+        #expect(!isFreeUDPPort(port))
+
+        relay?.cancel()
+        relay = nil
+        #expect(try await eventually { weakRelay == nil })
+        #expect(try await eventually { agent.closedConnections == 2 && isFreeUDPPort(port) })
+    }
+
+    /// Without `cancel()`, a dropped relay's live flows keep it, and its port,
+    /// until they idle out; then `deinit` closes the socket.
+    @Test func droppedRelayIsReleasedOnceItsFlowsIdleOut() async throws {
+        let agent = FakeAgent()
+        let port = try makeFreePort()
+        var limits = DatagramRelay.Limits.standard
+        limits.idleTimeout = .milliseconds(1500)
+        var relay: DatagramRelay? = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1",
+                                                      limits: limits) {
+            try await agent.connect()
+        }
+        weak let weakRelay = relay
+        let client = makeClient()
+        defer { close(client) }
+        send("a", from: client, to: port)
+        #expect(await receive(on: client) == "echo:a")
+
+        relay = nil
+        #expect(weakRelay != nil)  // the flow's reply thread holds it
+        #expect(try await eventually(within: .seconds(5)) { weakRelay == nil })
+        #expect(try await eventually(within: .seconds(5)) { agent.closedConnections == 1 && isFreeUDPPort(port) })
+    }
+
+    /// Ended flows give back their share of the byte budget, or a relay that
+    /// has seen enough traffic would drop everything.
+    @Test func endedFlowsReturnTheirQueuedBytes() async throws {
+        let agent = FakeAgent(connectDelay: .seconds(1))
+        let port = try makeFreePort()
+        var limits = DatagramRelay.Limits.standard
+        limits.maxFlows = 2
+        let relay = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1", limits: limits) {
+            try await agent.connect()
+        }
+        defer { relay.cancel() }
+        let clients = (0..<3).map { _ in makeClient() }
+        defer { clients.forEach { close($0) } }
+
+        // The third client evicts the first while all are still connecting.
+        for client in clients { send("x", from: client, to: port) }
+        #expect(try await eventually { relay.flowCount == 2 && relay.queuedByteCount > 0 })
+        #expect(await receive(on: clients[2]) == "echo:x")
+        #expect(try await eventually { relay.queuedByteCount == 0 })
     }
 }

@@ -39,9 +39,12 @@ private struct Fixture {
         try Data(sums.utf8).write(to: release.appendingPathComponent("SHA256SUMS"))
     }
 
-    /// Installs from the fixture's release directory.
-    func install() throws {
-        try GuestRelease.install(version: version, from: release, paths: paths)
+    /// Installs from the fixture's release directory. By default it waits out
+    /// the lock of an install that just finished, which another test's
+    /// subprocess can hold for a moment (`retryingWhileLockIsHeld(_:)`).
+    func install(waitingForLock: Bool = true) throws {
+        let install = { try GuestRelease.install(version: version, from: release, paths: paths) }
+        try waitingForLock ? retryingWhileLockIsHeld(install) : install()
     }
 
     /// The installed guest's files and their contents.
@@ -103,12 +106,12 @@ private let validGuest: [String: String?] = [
     try fixture.paths.createDirectories()
     try fixture.publish(validGuest)
     // flock locks belong to the open file, so a second open conflicts even
-    // within one process. O_CLOEXEC, like the real lock: a subprocess that
-    // another test spawns meanwhile must not inherit the lock and keep it
-    // past close().
+    // within one process. O_CLOEXEC, like the real lock, keeps a subprocess
+    // from holding it for its whole life, though not for the moment it is
+    // spawned; the install after close() waits that out.
     let fd = open(fixture.paths.guestInstallLock.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
     #expect(flock(fd, LOCK_EX | LOCK_NB) == 0)
-    let error = #expect(throws: DockmaError.self) { try fixture.install() }
+    let error = #expect(throws: DockmaError.self) { try fixture.install(waitingForLock: false) }
     #expect(error?.description.contains("another `dockma install` is running") == true)
     close(fd)
     try fixture.install()

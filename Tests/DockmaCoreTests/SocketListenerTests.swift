@@ -2,21 +2,6 @@ import Foundation
 import Testing
 @testable import DockmaCore
 
-/// A TCP port on 127.0.0.1 that was free a moment ago.
-private func makeFreePort() throws -> UInt16 {
-    let fd = socket(AF_INET, SOCK_STREAM, 0)
-    defer { close(fd) }
-    var addr = loopbackAddress(port: 0)
-    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-    let rc = withUnsafeMutablePointer(to: &addr) {
-        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-            bind(fd, $0, length) == 0 ? getsockname(fd, $0, &length) : -1
-        }
-    }
-    guard rc == 0 else { throw DockmaError("cannot find a free port") }
-    return UInt16(bigEndian: addr.sin_port)
-}
-
 /// `127.0.0.1:port`.
 private func loopbackAddress(port: UInt16) -> sockaddr_in {
     var addr = sockaddr_in()
@@ -100,4 +85,35 @@ private final class Counter: @unchecked Sendable {
     private var count = 0
     var value: Int { lock.withLock { count } }
     func increment() { lock.withLock { count += 1 } }
+}
+
+/// A listener dropped without `cancel()` closes its socket in `deinit`, and
+/// dispatch releases the handler with whatever it captured.
+@Test func droppedTCPListenerClosesItsPortAndReleasesItsHandler() async throws {
+    let port = try makeFreePort()
+    var sentinel: Sentinel? = Sentinel()
+    weak let weakSentinel = sentinel
+    var listener: SocketListener? = try SocketListener.tcp(address: IPAddress("127.0.0.1")!, port: port) {
+        [sentinel] client in
+        _ = sentinel
+        close(client)
+    }
+    weak let weakListener = listener
+    sentinel = nil
+    #expect(acceptsTCPConnection(port: port))
+    #expect(weakSentinel != nil)
+
+    listener = nil
+    #expect(weakListener == nil)
+    #expect(try await eventually { !acceptsTCPConnection(port: port) && weakSentinel == nil })
+}
+
+/// A dropped unix listener removes its socket file.
+@Test func droppedUnixListenerRemovesItsSocket() throws {
+    let path = NSTemporaryDirectory() + "dockma-\(getpid())-\(UInt32.random(in: 0...UInt32.max)).sock"
+    var listener: SocketListener? = try SocketListener.unix(path: path) { close($0) }
+    #expect(FileManager.default.fileExists(atPath: path))
+    _ = listener
+    listener = nil
+    #expect(!FileManager.default.fileExists(atPath: path))
 }

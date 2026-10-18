@@ -41,6 +41,60 @@ private func readToEOF(_ fd: Int32) -> Data? {
     #expect(closed.get())
 }
 
+/// A connected socket pair whose ends report EPIPE instead of raising
+/// SIGPIPE.
+private func makeSocketPair() -> (Int32, Int32) {
+    var pair: [Int32] = [0, 0]
+    #expect(socketpair(AF_UNIX, SOCK_STREAM, 0, &pair) == 0)
+    var on: Int32 = 1
+    for fd in pair { setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size)) }
+    return (pair[0], pair[1])
+}
+
+/// A connected TCP pair on 127.0.0.1, as `(client, server)`.
+private func makeTCPPair() throws -> (Int32, Int32) {
+    let listener = socket(AF_INET, SOCK_STREAM, 0)
+    defer { close(listener) }
+    var addr = sockaddr_in()
+    addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    addr.sin_family = sa_family_t(AF_INET)
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1")
+    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let client = socket(AF_INET, SOCK_STREAM, 0)
+    let rc = withUnsafeMutablePointer(to: &addr) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            guard bind(listener, $0, length) == 0, getsockname(listener, $0, &length) == 0,
+                  listen(listener, 1) == 0 else { return Int32(-1) }
+            return connect(client, $0, length)
+        }
+    }
+    let server = accept(listener, nil, nil)
+    guard rc == 0, server >= 0 else {
+        close(client)
+        throw DockmaError.posix("TCP pair")
+    }
+    return (client, server)
+}
+
+/// A failed read, here a reset by the server, ends both directions, including
+/// the one blocked reading from a client that never closes, so neither thread
+/// nor descriptor outlives the pipe.
+@Test func failedReadEndsBothDirectionsAndReportsOnce() async throws {
+    let (client, clientSide) = makeSocketPair()
+    let (serverSide, server) = try makeTCPPair()
+    defer { close(client) }
+    let closes = Mutex(0)
+    SocketCopier.pipe(clientSide, serverSide) { closes.set(closes.get() + 1) }
+
+    var reset = linger(l_onoff: 1, l_linger: 0)
+    setsockopt(server, SOL_SOCKET, SO_LINGER, &reset, socklen_t(MemoryLayout<linger>.size))
+    close(server)
+    #expect(try await eventually { closes.get() == 1 })
+    #expect(await runOnThread { readToEOF(client) } == Data())
+    try await Task.sleep(for: .milliseconds(100))
+    #expect(closes.get() == 1)
+}
+
 private final class Mutex<Value: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var value: Value
