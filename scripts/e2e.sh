@@ -26,8 +26,12 @@ fi
 
 # A daemon.json that was there before the run is restored, not deleted.
 user_daemon_json=
+# A failed run leaves nothing behind that would make the next run fail.
 cleanup() {
 	docker rm -f dockma-e2e-nginx dockma-e2e-echo dockma-e2e-held dockma-e2e-dind >/dev/null 2>&1 || true
+	docker network rm dockma-e2e-net >/dev/null 2>&1 || true
+	docker volume rm dockma-e2e >/dev/null 2>&1 || true
+	[ -z "${marker:-}" ] || rm -f -- "$marker"
 	[ -z "${holder:-}" ] || kill "$holder" 2>/dev/null || true
 	if [ -n "$user_daemon_json" ]; then
 		mv "$user_daemon_json" "$DOCKMA_DIR/daemon.json"
@@ -45,6 +49,9 @@ if [ ! -f "$DOCKMA_DIR/guest/guest-protocol" ] && [ "$DOCKMA_DIR" != "$HOME/.doc
 fi
 
 step "start"
+# A VM left running by a failed run would keep its old daemon binary, and
+# start would only attach to it.
+"$DOCKMA" stop >/dev/null
 "$DOCKMA" start >/dev/null
 "$DOCKMA" status | grep -q 'state: *running' || fail "status is not running"
 
