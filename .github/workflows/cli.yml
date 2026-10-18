@@ -13,6 +13,7 @@ on:
       - Makefile
       - dockma.entitlements
       - vm/agent/protocol # GuestImageTests compares it with GuestImage.protocolVersion
+      - CHANGELOG.md # VersionTests compares its newest heading with DockmaVersion.current
       - .github/workflows/cli.yml
   pull_request:
     paths: *paths
