@@ -112,7 +112,7 @@ func loopbackAddresses(address: String, isLoopback: Bool) {
 @MainActor
 private func holdLoopbackPort() throws -> (listener: SocketListener, port: UInt16) {
     for _ in 0..<50 {
-        let port = try makeFreePort()
+        let port = randomTestPort()
         if let listener = try? SocketListener.tcp(address: IPAddress("127.0.0.1")!, port: port, handler: { close($0) }) {
             return (listener, port)
         }
@@ -161,7 +161,7 @@ private func holdLoopbackPort() throws -> (listener: SocketListener, port: UInt1
 @MainActor
 private func makeBoundForwarder() throws -> (forwarder: PortForwarder, port: UInt16) {
     for _ in 0..<50 {
-        let port = try makeFreePort()
+        let port = randomTestPort()
         let forwarder = PortForwarder(bindAddress: "127.0.0.1") { throw DockmaError("no VM in this test") }
         forwarder.update([
             ForwardedPort(port: port, transport: .tcp, target: "127.0.0.1:80"),

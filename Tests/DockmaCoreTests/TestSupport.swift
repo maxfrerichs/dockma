@@ -33,49 +33,41 @@ func isFreeUDPPort(_ port: UInt16) -> Bool {
     } == 0
 }
 
-/// A port that TCP and UDP on 127.0.0.1 and ::1 could all bind a moment ago.
-///
-/// Picked outside macOS's ephemeral range (49152–65535): binding port 0 hands
-/// out a port from that range, and so does every connection or datagram that
-/// tests running in parallel send, so such a port can be taken before the
-/// test binds it.
-func makeFreePort() throws -> UInt16 {
-    for _ in 0..<100 {
-        let port = UInt16.random(in: 20000..<32000)
-        if [SOCK_STREAM, SOCK_DGRAM].allSatisfy({ canBind(type: $0, port: port) }) { return port }
-    }
-    throw DockmaError("cannot find a free port")
+/// A random port for a test to bind, away from macOS's ephemeral range
+/// (49152–65535) that client sockets draw from.
+func randomTestPort() -> UInt16 {
+    UInt16.random(in: 20000..<32000)
 }
 
-/// Whether a socket of `type` can bind `port` on both 127.0.0.1 and ::1.
-private func canBind(type: Int32, port: UInt16) -> Bool {
-    let v4 = socket(AF_INET, type, 0), v6 = socket(AF_INET6, type, 0)
-    defer { close(v4); close(v6) }
-    var on: Int32 = 1
-    setsockopt(v6, IPPROTO_IPV6, IPV6_V6ONLY, &on, socklen_t(MemoryLayout<Int32>.size))
-    var addr4 = loopbackSocketAddress(port: port)
-    var addr6 = sockaddr_in6()
-    addr6.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
-    addr6.sin6_family = sa_family_t(AF_INET6)
-    addr6.sin6_port = port.bigEndian
-    addr6.sin6_addr = in6addr_loopback
-    let bound4 = withUnsafePointer(to: &addr4) {
-        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(v4, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+/// Calls `make` with random ports until it doesn't fail on a port in use,
+/// and returns what it made with its port; any other error is thrown at once.
+///
+/// There is no check that a port is free first: a probe socket closed just
+/// before the real bind can still hold the port (see
+/// `retryingWhileLockIsHeld(_:)`), so the real bind is the only check.
+func bindRandomPort<Value>(_ make: (UInt16) throws -> Value) throws -> (Value, UInt16) {
+    var attempt = 0
+    while true {
+        attempt += 1
+        let port = randomTestPort()
+        do {
+            return (try make(port), port)
+        } catch let error as DockmaError where error.description.hasSuffix(": Address already in use") && attempt < 50 {
+            continue
+        }
     }
-    let bound6 = withUnsafePointer(to: &addr6) {
-        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(v6, $0, socklen_t(MemoryLayout<sockaddr_in6>.size)) }
-    }
-    return bound4 == 0 && bound6 == 0
 }
 
 /// Runs `body` again while it fails on a lock that is still held, for up to
 /// 2 s, and returns its result; any other error is thrown at once.
 ///
-/// A lock can outlive the `close()` that should release it: a process that
-/// another test spawns at that moment briefly shares every open file of this
-/// process, close-on-exec or not, until it execs. Measured on macOS 27 with
+/// A descriptor can outlive the `close()` that should release it: a process
+/// that another test spawns at that moment briefly shares every open file of
+/// this process, close-on-exec or not, until it execs. That keeps a lock held,
+/// or a closed socket's port bound, for a moment. Measured on macOS 27 with
 /// `O_CLOEXEC`: 129 of 100,000 close-then-relock cycles failed while one
-/// thread spawned processes, 853 with four, none with none.
+/// thread spawned processes, 853 with four, none with none; binding a port
+/// right after closing a socket on it failed 149 and 678 times in 50,000.
 func retryingWhileLockIsHeld<Value>(_ body: () throws -> Value) throws -> Value {
     let deadline = ContinuousClock.now + .seconds(2)
     while true {

@@ -61,12 +61,13 @@ private func exchange(port: UInt16, from source: in_addr? = nil) -> Data? {
 /// whose source is a non-loopback address. Both connect to 127.0.0.1, so the
 /// test never listens on the network and needs no firewall exception.
 @Test func loopbackOnlyListenerClosesNonLoopbackPeers() throws {
-    let port = try makeFreePort()
     let accepted = Counter()
-    let listener = try SocketListener.tcp(address: IPAddress("127.0.0.1")!, port: port, acceptsOnlyLoopback: true) { client in
-        accepted.increment()
-        writeAll(Data("ok".utf8), to: client)
-        close(client)
+    let (listener, port) = try bindRandomPort { port in
+        try SocketListener.tcp(address: IPAddress("127.0.0.1")!, port: port, acceptsOnlyLoopback: true) { client in
+            accepted.increment()
+            writeAll(Data("ok".utf8), to: client)
+            close(client)
+        }
     }
     defer { listener.cancel() }
     #expect(listener.description == "127.0.0.1:\(port) (loopback only)")
@@ -90,13 +91,15 @@ private final class Counter: @unchecked Sendable {
 /// A listener dropped without `cancel()` closes its socket in `deinit`, and
 /// dispatch releases the handler with whatever it captured.
 @Test func droppedTCPListenerClosesItsPortAndReleasesItsHandler() async throws {
-    let port = try makeFreePort()
     var sentinel: Sentinel? = Sentinel()
     weak let weakSentinel = sentinel
-    var listener: SocketListener? = try SocketListener.tcp(address: IPAddress("127.0.0.1")!, port: port) {
-        [sentinel] client in
-        _ = sentinel
-        close(client)
+    var listener: SocketListener?
+    let port: UInt16
+    (listener, port) = try bindRandomPort { [sentinel] port in
+        try SocketListener.tcp(address: IPAddress("127.0.0.1")!, port: port) { client in
+            _ = sentinel
+            close(client)
+        }
     }
     weak let weakListener = listener
     sentinel = nil

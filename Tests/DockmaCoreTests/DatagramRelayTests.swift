@@ -132,9 +132,10 @@ private final class Counter: @unchecked Sendable {
 @Suite(.serialized) struct DatagramRelayTests {
     @Test func relayTunnelsEachClientAndKeepsDatagramsSentWhileConnecting() async throws {
         let agent = FakeAgent(connectDelay: .milliseconds(150))
-        let port = try makeFreePort()
-        let relay = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "127.0.0.1:53") {
-            try await agent.connect()
+        let (relay, port) = try bindRandomPort { port in
+            try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "127.0.0.1:53") {
+                try await agent.connect()
+            }
         }
         defer { relay.cancel() }
         let first = makeClient(), second = makeClient()
@@ -154,11 +155,12 @@ private final class Counter: @unchecked Sendable {
 
     @Test func relayEndsIdleFlows() async throws {
         let agent = FakeAgent()
-        let port = try makeFreePort()
         var limits = DatagramRelay.Limits.standard
         limits.idleTimeout = .milliseconds(200)
-        let relay = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1", limits: limits) {
-            try await agent.connect()
+        let (relay, port) = try bindRandomPort { port in
+            try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1", limits: limits) {
+                try await agent.connect()
+            }
         }
         defer { relay.cancel() }
         let client = makeClient()
@@ -175,11 +177,12 @@ private final class Counter: @unchecked Sendable {
 
     @Test func newClientAtTheLimitEndsTheLeastRecentlyActiveFlow() async throws {
         let agent = FakeAgent()
-        let port = try makeFreePort()
         var limits = DatagramRelay.Limits.standard
         limits.maxFlows = 2
-        let relay = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1", limits: limits) {
-            try await agent.connect()
+        let (relay, port) = try bindRandomPort { port in
+            try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1", limits: limits) {
+                try await agent.connect()
+            }
         }
         defer { relay.cancel() }
         let first = makeClient(), second = makeClient(), third = makeClient()
@@ -205,9 +208,10 @@ private final class Counter: @unchecked Sendable {
 
     @Test func cancelledRelayClosesItsTunnels() async throws {
         let agent = FakeAgent()
-        let port = try makeFreePort()
-        let relay = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1") {
-            try await agent.connect()
+        let (relay, port) = try bindRandomPort { port in
+            try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1") {
+                try await agent.connect()
+            }
         }
         let client = makeClient()
         defer { close(client) }
@@ -216,19 +220,23 @@ private final class Counter: @unchecked Sendable {
 
         relay.cancel()
         #expect(try await eventually { agent.closedConnections == 1 })
-        // The port is free again.
-        let rebound = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1") {
-            try await agent.connect()
-        }
-        rebound.cancel()
+        // The port is free again, once the socket's close has taken effect.
+        #expect(try await eventually {
+            guard let rebound = try? DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1", connect: {
+                try await agent.connect()
+            }) else { return false }
+            rebound.cancel()
+            return true
+        })
     }
 
     @Test func connectFailureEndsTheFlow() async throws {
         let attempts = Counter()
-        let port = try makeFreePort()
-        let relay = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1") {
-            attempts.increment()
-            throw DockmaError("no VM")
+        let (relay, port) = try bindRandomPort { port in
+            try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1") {
+                attempts.increment()
+                throw DockmaError("no VM")
+            }
         }
         defer { relay.cancel() }
         let client = makeClient()
@@ -243,11 +251,12 @@ private final class Counter: @unchecked Sendable {
 
     @Test func relayDropsDatagramsBeyondTheByteBudget() async throws {
         let agent = FakeAgent(connectDelay: .milliseconds(300))
-        let port = try makeFreePort()
         var limits = DatagramRelay.Limits.standard
         limits.maxQueuedBytes = 100  // two 40-byte datagrams plus their 2-byte headers
-        let relay = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1", limits: limits) {
-            try await agent.connect()
+        let (relay, port) = try bindRandomPort { port in
+            try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1", limits: limits) {
+                try await agent.connect()
+            }
         }
         defer { relay.cancel() }
         let client = makeClient()
@@ -268,11 +277,12 @@ private final class Counter: @unchecked Sendable {
     @Test func loopbackOnlyRelayDropsDatagramsFromOtherAddresses() async throws {
         let attempts = Counter()
         let agent = FakeAgent()
-        let port = try makeFreePort()
-        let relay = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1",
-                                      acceptsOnlyLoopback: true) {
-            attempts.increment()
-            return try await agent.connect()
+        let (relay, port) = try bindRandomPort { port in
+            try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1",
+                                          acceptsOnlyLoopback: true) {
+                attempts.increment()
+                return try await agent.connect()
+            }
         }
         defer { relay.cancel() }
         #expect(relay.description == "127.0.0.1:\(port)/udp (loopback only)")
@@ -295,9 +305,12 @@ private final class Counter: @unchecked Sendable {
     /// it is freed only once `cancel()` has ended them.
     @Test func cancelledRelayIsReleasedWithItsFlows() async throws {
         let agent = FakeAgent()
-        let port = try makeFreePort()
-        var relay: DatagramRelay? = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1") {
-            try await agent.connect()
+        var relay: DatagramRelay?
+        let port: UInt16
+        (relay, port) = try bindRandomPort { port in
+            try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1") {
+                try await agent.connect()
+            }
         }
         weak let weakRelay = relay
         let first = makeClient(), second = makeClient()
@@ -319,12 +332,15 @@ private final class Counter: @unchecked Sendable {
     /// until they idle out; then `deinit` closes the socket.
     @Test func droppedRelayIsReleasedOnceItsFlowsIdleOut() async throws {
         let agent = FakeAgent()
-        let port = try makeFreePort()
         var limits = DatagramRelay.Limits.standard
         limits.idleTimeout = .milliseconds(1500)
-        var relay: DatagramRelay? = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1",
-                                                      limits: limits) {
-            try await agent.connect()
+        var relay: DatagramRelay?
+        let port: UInt16
+        (relay, port) = try bindRandomPort { port in
+            try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1",
+                                                          limits: limits) {
+                try await agent.connect()
+            }
         }
         weak let weakRelay = relay
         let client = makeClient()
@@ -342,11 +358,12 @@ private final class Counter: @unchecked Sendable {
     /// has seen enough traffic would drop everything.
     @Test func endedFlowsReturnTheirQueuedBytes() async throws {
         let agent = FakeAgent(connectDelay: .seconds(1))
-        let port = try makeFreePort()
         var limits = DatagramRelay.Limits.standard
         limits.maxFlows = 2
-        let relay = try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1", limits: limits) {
-            try await agent.connect()
+        let (relay, port) = try bindRandomPort { port in
+            try DatagramRelay(address: IPAddress("127.0.0.1")!, port: port, target: "t:1", limits: limits) {
+                try await agent.connect()
+            }
         }
         defer { relay.cancel() }
         let clients = (0..<3).map { _ in makeClient() }
