@@ -30,8 +30,42 @@ permissions:
   contents: read
 
 jobs:
+  # CI builds (push, pull request, manual run) check out the triggering
+  # commit and use the gha cache. This job never checks out `inputs.ref`.
   build:
+    if: ${{ !inputs.version }}
     # Native arm64, so the kernel builds without emulation.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The gha cache exporter needs a docker-container builder.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # A plain `docker buildx` step only reaches the gha cache with the
+      # runtime token exposed.
+      - uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
+      - name: Build
+        run: make guest BUILDX_FLAGS="--cache-from type=gha,scope=guest --cache-to type=gha,scope=guest,mode=max"
+      - name: Package
+        id: package
+        run: |
+          name="dockma-linux-${GITHUB_SHA::12}-arm64.tar.gz"
+          ls -l vm/out
+          tar -czf "$name" -C vm/out Image initramfs.cpio.lz4 guest-protocol
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: guest
+          path: ${{ steps.package.outputs.name }}
+          if-no-files-found: error
+
+  # Release builds (called by release.yml) check out the tag and use no
+  # cache and no runtime token, so a cache entry can't feed into a
+  # published image.
+  release:
+    if: ${{ inputs.version }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
     steps:
@@ -39,24 +73,15 @@ jobs:
         with:
           ref: ${{ inputs.ref }}
           persist-credentials: false
-      # The gha cache exporter needs a docker-container builder.
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-      # A plain `docker buildx` step only reaches the gha cache with the
-      # runtime token exposed. Release builds skip the cache, so a cache
-      # entry can't feed into a published image.
-      - if: ${{ !inputs.version }}
-        uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
       - name: Build
-        env:
-          BUILDX_FLAGS: ${{ !inputs.version && '--cache-from type=gha,scope=guest --cache-to type=gha,scope=guest,mode=max' || '' }}
-        run: make guest BUILDX_FLAGS="$BUILDX_FLAGS"
+        run: make guest
       - name: Package
         id: package
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          version="${VERSION:-${GITHUB_SHA::12}}"
-          name="dockma-linux-${version}-arm64.tar.gz"
+          name="dockma-linux-${VERSION}-arm64.tar.gz"
           ls -l vm/out
           tar -czf "$name" -C vm/out Image initramfs.cpio.lz4 guest-protocol
           echo "name=$name" >> "$GITHUB_OUTPUT"

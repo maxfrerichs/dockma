@@ -16,7 +16,9 @@ on:
       - .github/workflows/cli.yml
   pull_request:
     paths: *paths
-  workflow_dispatch:
+  # No workflow_dispatch: with it CodeQL treats `inputs.ref` as user-chosen
+  # in a privileged run (cache-poisoning/poisonable-step). Only release.yml
+  # passes a ref, always a validated version tag.
   workflow_call:
     inputs:
       version:
