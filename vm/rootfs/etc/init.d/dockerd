@@ -1,12 +1,15 @@
 #!/bin/sh
-# Run by init (respawn). dockerd's log goes to the second console, which the
-# host writes to ~/.dockma/logs/docker.log. The pipe keeps dockerd from
-# seeing a TTY, so its log has no color escape codes.
+# Run by init (respawn). dockerd's log goes to the console port named
+# "docker", which the host writes to ~/.dockma/logs/docker.log. The port is
+# not a TTY, so dockerd's log has no color escape codes.
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+log=/dev/virtio-ports/docker
+# rcS links the port; without it, the console keeps the output visible.
+[ -e "$log" ] || log=/dev/console
 if [ -e /run/dockma-disk-failed ]; then
 	# Don't start on an empty /var/lib/docker; sleep so init doesn't respawn
 	# this script in a tight loop.
-	echo "dockerd not started: data disk failed: $(cat /run/dockma-disk-failed)" >/dev/hvc1
+	echo "dockerd not started: data disk failed: $(cat /run/dockma-disk-failed)" >"$log"
 	exec sleep 3600
 fi
 
@@ -26,7 +29,7 @@ state=$(cat /run/dockma/state 2>/dev/null)
 config=/etc/docker/daemon.json
 generated=/run/dockma/daemon.json
 user="${state:-/nonexistent}/daemon.json"
-if dockma-agent daemon-config /etc/docker/daemon.json "$user" /run/dockma/gateway "$generated" 2>/dev/hvc1; then
+if dockma-agent daemon-config /etc/docker/daemon.json "$user" /run/dockma/gateway "$generated" 2>"$log"; then
 	# Only a user's daemon.json can make it invalid; validating costs a
 	# dockerd start, which every boot would otherwise pay.
 	if [ ! -f "$user" ]; then
@@ -34,7 +37,7 @@ if dockma-agent daemon-config /etc/docker/daemon.json "$user" /run/dockma/gatewa
 	elif problem=$(dockerd --validate --config-file "$generated" 2>&1); then
 		config=$generated
 	else
-		echo "dockma: using the default dockerd configuration; $user: $problem" >/dev/hvc1
+		echo "dockma: using the default dockerd configuration; $user: $problem" >"$log"
 	fi
 fi
-dockerd --config-file "$config" 2>&1 | cat >/dev/hvc1
+exec dockerd --config-file "$config" >"$log" 2>&1

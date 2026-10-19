@@ -6,7 +6,7 @@ public enum GuestImage {
     /// The host↔guest protocol this binary speaks. Mirrored by
     /// `vm/agent/protocol`; bump both on an incompatible change. Images
     /// without a protocol file are version 1.
-    public static let protocolVersion = 3
+    public static let protocolVersion = 4
 
     /// Throws when the guest image is missing or speaks another protocol.
     public static func validate(paths: Paths) throws {
@@ -74,12 +74,14 @@ public enum VMConfigurationBuilder {
         vm.memorySize = min(max(config.memoryMiB * 1024 * 1024, VZVirtualMachineConfiguration.minimumAllowedMemorySize),
                             VZVirtualMachineConfiguration.maximumAllowedMemorySize)
 
-        // hvc0: kernel and init output. hvc1: dockerd output.
-        vm.serialPorts = [consoleLog, dockerLog].map { handle in
-            let port = VZVirtioConsoleDeviceSerialPortConfiguration()
-            port.attachment = VZFileHandleSerialPortAttachment(fileHandleForReading: nil, fileHandleForWriting: handle)
-            return port
-        }
+        // One console device with named ports, so the guest finds each by
+        // name rather than by device probe order. "console" is the kernel
+        // console (hvc0): kernel and init output. "docker" is dockerd's log.
+        let console = VZVirtioConsoleDeviceConfiguration()
+        console.ports.maximumPortCount = 2
+        console.ports[0] = Self.makeLogPort(name: "console", isConsole: true, writingTo: consoleLog)
+        console.ports[1] = Self.makeLogPort(name: "docker", isConsole: false, writingTo: dockerLog)
+        vm.consoleDevices = [console]
 
         let disk = try VZDiskImageStorageDeviceAttachment(
             url: paths.dataDisk, readOnly: false, cachingMode: .automatic, synchronizationMode: .fsync)
@@ -119,6 +121,16 @@ public enum VMConfigurationBuilder {
 
         try vm.validate()
         return Output(configuration: vm, rosettaWarning: rosettaWarning)
+    }
+
+    /// Makes a named, host-to-guest-only console port that writes the
+    /// guest's output to `handle`.
+    static func makeLogPort(name: String, isConsole: Bool, writingTo handle: FileHandle) -> VZVirtioConsolePortConfiguration {
+        let port = VZVirtioConsolePortConfiguration()
+        port.name = name
+        port.isConsole = isConsole
+        port.attachment = VZFileHandleSerialPortAttachment(fileHandleForReading: nil, fileHandleForWriting: handle)
+        return port
     }
 
     /// The data disk's size in bytes (not its allocated size), or nil if

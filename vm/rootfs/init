@@ -3,6 +3,20 @@
 # rootfs, so everything is moved into a tmpfs and init switch_roots into it.
 # A private busybox copy (/busybox) is used because /bin moves away mid-loop.
 /busybox mount -t devtmpfs devtmpfs /dev
+# The kernel console (hvc0) is a port of a multiport virtio console, which
+# the driver adds asynchronously. If the kernel tried to open /dev/console
+# before that, init has no stdin, stdout or stderr: wait up to 1 s for the
+# console, then reopen them. Only when it opens: a failed redirection on
+# exec, or on a special builtin such as :, would end this shell, and PID 1
+# exiting panics the kernel. true is a regular builtin; it only fails.
+i=0
+while ! true 2>/dev/null >/dev/console && [ $i -lt 100 ]; do
+	/busybox usleep 10000
+	i=$((i + 1))
+done
+if true 2>/dev/null >/dev/console; then
+	exec </dev/console >/dev/console 2>&1
+fi
 /busybox mkdir -p /newroot
 /busybox mount -t tmpfs -o mode=0755 tmpfs /newroot
 for entry in /*; do

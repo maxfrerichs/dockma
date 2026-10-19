@@ -268,7 +268,7 @@ dockma shell ► ~/.dockma/shell.sock  │                        │
               ├─ 127.0.0.1:P  → vsock 1026 (TCP/UDP tunnel) ─►├─► 127.0.0.1:P (docker-proxy)
               └─ shell.sock   → vsock 1027 (shell frames) ───►└─► /bin/sh on a pty or pipes
 
-  virtio-console hvc0/hvc1 → logs/console.log, logs/docker.log
+  virtio-console ports    → "console" (hvc0) → logs/console.log, "docker" → logs/docker.log
   virtiofs "home"          → $HOME mounted at the same path
   virtiofs "rosetta"       → /mnt/rosetta, registered with binfmt_misc
   virtio-blk data.img      → ext4 on /var/lib/docker
