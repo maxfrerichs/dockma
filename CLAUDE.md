@@ -107,6 +107,8 @@ No linter or formatter is configured for the code. Lint workflows with `docker r
 - **Kernel config gates in the Dockerfile.**
   - Every option in `vm/kernel/dockma.config` must survive `olddefconfig`. A dropped option means an unmet dependency. Every `# CONFIG_X is not set` line must stay disabled; another option's `select` can turn it back on.
   - `vm/kernel/check-docker-config.sh` enforces moby's required list. It exempts the iptables/xtables options because dockerd runs with `firewall-backend: nftables`, which needs the `nft` binary.
+  - Without modules, a missing option shows up only when a container asks for it. `scripts/e2e.sh` probes the ones kube-proxy, k3s and CNIs use. Check a new option with `/proc/config.gz` in the guest.
+  - `IP_NF_IPTABLES` and `IP6_NF_IPTABLES` are not the legacy tables (those are `IP*_NF_IPTABLES_LEGACY`, kept off). They register each family's xt extensions for iptables-nft: without `IP6_NF_IPTABLES`, ip6tables has no `MARK` target or `addrtype` match, even with `NETFILTER_XT_MARK=y`.
 - **Stage-0 `/init` moves the initramfs into a tmpfs and runs `switch_root`.** runc can't `pivot_root` out of rootfs.
 - **BuildKit forbids `mknod`.** Device nodes come from the kernel's `gen_init_cpio`.
 - **Slow exit of `swift-package` (cause unconfirmed).** With Swift 6.4 on macOS 27.0.1, `swift-package` processes have stayed in the exiting (`E`) state for 30–60 minutes after `swift test` or a failed build. SIGKILL doesn't speed this up, but they do exit eventually. The work itself completes, so read results from the output instead of waiting for the process to exit.

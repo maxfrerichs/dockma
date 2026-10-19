@@ -28,7 +28,7 @@ fi
 user_daemon_json=
 # A failed run leaves nothing behind that would make the next run fail.
 cleanup() {
-	docker rm -f dockma-e2e-nginx dockma-e2e-echo dockma-e2e-held dockma-e2e-dind >/dev/null 2>&1 || true
+	docker rm -f dockma-e2e-nginx dockma-e2e-echo dockma-e2e-held dockma-e2e-dind dockma-e2e-k3s >/dev/null 2>&1 || true
 	docker network rm dockma-e2e-net >/dev/null 2>&1 || true
 	docker volume rm dockma-e2e >/dev/null 2>&1 || true
 	[ -z "${marker:-}" ] || rm -f -- "$marker"
@@ -205,6 +205,70 @@ for _ in $(seq 1 60); do
 done
 [ -n "$ok" ] || { docker logs --tail 20 dockma-e2e-dind >&2; fail "dockerd in docker:dind did not start"; }
 docker rm -f dockma-e2e-dind >/dev/null
+
+# The kernel has no modules, so a missing option shows up only when a
+# workload asks for it. These are the ones kube-proxy, k3s and CNIs use,
+# checked in both address families; each failure names its feature.
+step "kernel features for iptables-nft, ipset and VXLAN in containers"
+docker run --rm -i --privileged alpine sh <<'EOF' || fail "kernel features missing (see above)"
+apk add -q iptables ip6tables ipset iproute2 nftables conntrack-tools >/dev/null || exit 1
+failed=0
+check() {
+	name=$1
+	shift
+	out=$("$@" 2>&1) || { echo "missing: $name: $(echo "$out" | tail -n 1)"; failed=1; }
+}
+for f in iptables ip6tables; do
+	check "$f REJECT" xtables-nft-multi $f -A INPUT -p tcp --dport 9 -j REJECT
+	check "$f MARK" xtables-nft-multi $f -t nat -A POSTROUTING -j MARK --xor-mark 0x4000
+	check "$f addrtype" xtables-nft-multi $f -A INPUT -m addrtype --dst-type LOCAL -j ACCEPT
+	check "$f recent" xtables-nft-multi $f -A INPUT -m recent --name e2e --set
+	check "$f NFLOG" xtables-nft-multi $f -A INPUT -j NFLOG
+	check "$f LOG" xtables-nft-multi $f -A INPUT -j LOG
+	check "$f CT" xtables-nft-multi $f -t raw -A PREROUTING -j CT --notrack
+	check "$f CONNMARK" xtables-nft-multi $f -t mangle -A PREROUTING -j CONNMARK --restore-mark
+	check "$f TCPMSS" xtables-nft-multi $f -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
+	check "$f owner" xtables-nft-multi $f -A OUTPUT -m owner --uid-owner 0 -j ACCEPT
+done
+check "ipset hash:ip" ipset create e2e-ip hash:ip
+check "ipset hash:net" ipset create e2e-net hash:net
+check "ipset list:set" ipset create e2e-list list:set
+check "iptables set match" xtables-nft-multi iptables -A INPUT -m set --match-set e2e-ip src -j ACCEPT
+# kind's network policy: connections queued to userspace, accepted ones
+# labeled in conntrack, conntrack entries listed over netlink.
+nft add table inet e2e && nft add chain inet e2e c '{ type filter hook forward priority 0; }'
+check "nft queue" nft add rule inet e2e c queue num 100 bypass
+check "nft ct label" nft add rule inet e2e c ct label set 100
+check "conntrack netlink" conntrack -L
+check "vxlan" ip link add e2e-vx type vxlan id 42 dstport 4789 dev eth0
+check "/proc/config.gz" test -s /proc/config.gz
+exit $failed
+EOF
+
+# k3s (what k3d runs) uses VXLAN for flannel, ipset for network policy and
+# iptables-nft for kube-proxy. Each degrades on its own: flannel's failure
+# stops the server seconds after the node is Ready, the others only log.
+step "k3s server stays up, kube-proxy syncs, the network policy controller starts"
+docker run -d --privileged --name dockma-e2e-k3s --tmpfs /run --tmpfs /var/run \
+	rancher/k3s:v1.33.5-k3s1 server --disable=traefik,metrics-server >/dev/null
+ok=
+for _ in $(seq 1 90); do
+	[ "$(docker exec dockma-e2e-k3s kubectl get nodes --no-headers 2>/dev/null | awk '{print $2}')" = Ready ] && ok=1 && break
+	sleep 1
+done
+[ -n "$ok" ] || { docker logs --tail 20 dockma-e2e-k3s >&2; fail "k3s node not Ready"; }
+# A Service without endpoints makes kube-proxy write a REJECT rule.
+docker exec dockma-e2e-k3s kubectl create service clusterip dockma-e2e-noep --tcp=80 >/dev/null || fail "k3s: create service"
+sleep 20
+[ "$(docker inspect -f '{{.State.Running}}' dockma-e2e-k3s)" = true ] || { docker logs --tail 20 dockma-e2e-k3s >&2; fail "k3s server exited"; }
+k3s_log=$(docker logs dockma-e2e-k3s 2>&1)
+for problem in "Failed to execute iptables-restore" "Skipping network policy controller" "flannel exited"; do
+	if printf '%s\n' "$k3s_log" | grep -qF "$problem"; then
+		printf '%s\n' "$k3s_log" | grep -F -A 4 "$problem" | head -n 10 >&2
+		fail "k3s: $problem"
+	fi
+done
+docker rm -f dockma-e2e-k3s >/dev/null
 
 step "amd64 image via Rosetta"
 [ "$(docker run --rm --platform linux/amd64 alpine uname -m)" = x86_64 ] || fail "amd64 container"

@@ -47,7 +47,8 @@ RUN missing=0; \
     exit $missing
 COPY kernel/check-docker-config.sh /build/
 RUN sh /build/check-docker-config.sh /build/check-config.sh .config
-RUN make ARCH=arm64 -j"$(nproc)" Image \
+# /proc/version names dockma as the builder, not the BuildKit sandbox.
+RUN make ARCH=arm64 KBUILD_BUILD_USER=dockma KBUILD_BUILD_HOST=dockma.dev -j"$(nproc)" Image \
  && mkdir -p /out && cp arch/arm64/boot/Image /out/Image && cp .config /out/kernel.config
 
 # --- Guest agent -----------------------------------------------------------
