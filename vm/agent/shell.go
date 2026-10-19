@@ -18,7 +18,8 @@ import (
 )
 
 // Shell session frames: [type u8][length u32 big-endian][payload]. Mirrors
-// ShellFrame in Sources/dockma/ShellProtocol.swift; keep the two in sync.
+// ShellFrame in Sources/DockmaCore/Shell/ShellProtocol.swift; keep the two in
+// sync. Specified in docs/shell-protocol.md.
 const (
 	frameStart    byte = 1  // client: JSON shellStart, always first
 	frameStdin    byte = 2  // client: input bytes

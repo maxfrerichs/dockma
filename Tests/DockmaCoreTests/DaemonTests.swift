@@ -10,7 +10,7 @@ import Testing
     // the same process conflicts just like a second daemon would.
     #expect(throws: DockmaError.self) { _ = try Daemon.acquireLock(at: url) }
     close(first)
-    let again = try Daemon.acquireLock(at: url)
+    let again = try retryingWhileLockIsHeld { try Daemon.acquireLock(at: url) }
     close(again)
 }
 

@@ -108,11 +108,11 @@ func loopbackAddresses(address: String, isLoopback: Bool) {
     #expect(IPAddress("::ffff:127.0.0.1")!.description == "::ffff:127.0.0.1")
 }
 
-/// A listener on 127.0.0.1 at some free high port, which holds that port.
+/// A listener on 127.0.0.1 at a free port, which holds that port.
 @MainActor
 private func holdLoopbackPort() throws -> (listener: SocketListener, port: UInt16) {
     for _ in 0..<50 {
-        let port = UInt16.random(in: 40000...60000)
+        let port = randomTestPort()
         if let listener = try? SocketListener.tcp(address: IPAddress("127.0.0.1")!, port: port, handler: { close($0) }) {
             return (listener, port)
         }
@@ -154,4 +154,46 @@ private func holdLoopbackPort() throws -> (listener: SocketListener, port: UInt1
     forwarder.update([])
     #expect(forwarder.hasFailures == false)
     #expect(forwarder.ports.isEmpty)
+}
+
+/// A forwarder bound to a TCP and a UDP port that were free on 127.0.0.1 and
+/// ::1, with tunnels that always fail.
+@MainActor
+private func makeBoundForwarder() throws -> (forwarder: PortForwarder, port: UInt16) {
+    for _ in 0..<50 {
+        let port = randomTestPort()
+        let forwarder = PortForwarder(bindAddress: "127.0.0.1") { throw DockmaError("no VM in this test") }
+        forwarder.update([
+            ForwardedPort(port: port, transport: .tcp, target: "127.0.0.1:80"),
+            ForwardedPort(port: port, transport: .udp, target: "127.0.0.1:53"),
+        ])
+        if !forwarder.hasFailures && forwarder.ports == [tcp(port), udp(port)] { return (forwarder, port) }
+        forwarder.removeAll()
+    }
+    throw DockmaError("no free port")
+}
+
+@MainActor
+@Test func removeAllFreesEveryPort() async throws {
+    let (forwarder, port) = try makeBoundForwarder()
+    #expect(acceptsTCPConnection(port: port))
+    #expect(!isFreeUDPPort(port))
+
+    forwarder.removeAll()
+    #expect(forwarder.ports.isEmpty)
+    #expect(try await eventually { !acceptsTCPConnection(port: port) && isFreeUDPPort(port) })
+}
+
+/// A forwarder dropped without `removeAll()` takes its listeners and relays
+/// with it.
+@MainActor
+@Test func droppedForwarderFreesEveryPort() async throws {
+    var bound: (forwarder: PortForwarder, port: UInt16)? = try makeBoundForwarder()
+    let port = bound!.port
+    weak let weakForwarder = bound?.forwarder
+    #expect(acceptsTCPConnection(port: port))
+
+    bound = nil
+    #expect(weakForwarder == nil)
+    #expect(try await eventually { !acceptsTCPConnection(port: port) && isFreeUDPPort(port) })
 }
