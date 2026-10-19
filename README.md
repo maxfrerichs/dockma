@@ -232,7 +232,7 @@ The directory and `logs/` are kept at mode 0700, and `data.img`, `config.json` a
 | `config.json` | Settings |
 | `daemon.json`, `ca-certificates/`, `certs.d/` | Optional dockerd settings and certificates; see [Docker daemon settings and certificates](#docker-daemon-settings-and-certificates) |
 | `data.img` | Sparse raw disk, ext4, mounted at `/var/lib/docker` in the guest |
-| `guest/Image`, `guest/initramfs.cpio.lz4` | Guest kernel and initramfs, from `dockma install` or `make install-guest` |
+| `guest/dockma-kernel`, `guest/dockma-initrd.img` | Guest kernel and lz4 initramfs, named as LinuxKit names them, from `dockma install` or `make install-guest` |
 | `guest/guest-protocol` | The host↔guest protocol number the guest was built for. `dockma start` refuses a guest that doesn't match. |
 | `.guest-install.lock` | Held by a running `dockma install`, which also clears staging folders that a killed install left behind |
 | `logs/console.log` | Kernel and init output; the three previous boots are kept as `console.log.1` (newest) to `.3` |

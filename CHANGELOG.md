@@ -4,6 +4,9 @@ All notable changes to dockma are recorded here. The format follows [Keep a Chan
 
 ## Unreleased
 
+### Changed
+- The guest's kernel and initramfs are named as LinuxKit names its kernel+initrd output: `~/.dockma/guest/dockma-kernel` and `dockma-initrd.img` (were `Image` and `initramfs.cpio.lz4`). `dockma install`, which install.sh runs, puts the new files in place. A CLI built from source needs `make guest install-guest` once; until then `dockma start` refuses with that hint.
+
 ## 0.5.0 – 2026-10-19
 
 ### Added

@@ -63,7 +63,7 @@ private struct Fixture {
 }
 
 private let validGuest: [String: String?] = [
-    "Image": "kernel", "initramfs.cpio.lz4": "initramfs", "guest-protocol": "\(GuestImage.protocolVersion)\n",
+    "dockma-kernel": "kernel", "dockma-initrd.img": "initramfs", "guest-protocol": "\(GuestImage.protocolVersion)\n",
 ]
 
 @Test func checksumParsesTextAndBinaryMode() {
@@ -131,7 +131,7 @@ private let validGuest: [String: String?] = [
 @Test func replacesAnInstalledGuest() throws {
     let fixture = try Fixture()
     defer { try? FileManager.default.removeItem(at: fixture.root) }
-    try fixture.publish(["Image": "old", "initramfs.cpio.lz4": "old", "guest-protocol": "\(GuestImage.protocolVersion)\n"])
+    try fixture.publish(["dockma-kernel": "old", "dockma-initrd.img": "old", "guest-protocol": "\(GuestImage.protocolVersion)\n"])
     try fixture.install()
     try fixture.publish(validGuest)
     try fixture.install()
@@ -146,7 +146,7 @@ private let validGuest: [String: String?] = [
         ("not in SHA256SUMS", "has no entry", { try $0.publish(validGuest, listed: false) }),
         ("extra entry", "holds", { try $0.publish(validGuest.merging(["extra": "x"]) { a, _ in a }) }),
         ("missing entry", "holds", { try $0.publish(validGuest.filter { $0.key != "guest-protocol" }) }),
-        ("symlink", "not a regular file", { try $0.publish(validGuest.merging(["Image": nil]) { _, b in b }) }),
+        ("symlink", "not a regular file", { try $0.publish(validGuest.merging(["dockma-kernel": nil]) { _, b in b }) }),
         ("wrong protocol", "speaks guest protocol", { try $0.publish(validGuest.merging(["guest-protocol": older]) { _, b in b }) }),
         ("missing asset", "couldn't download", { fixture in
             try fixture.publish(validGuest)
@@ -156,7 +156,7 @@ private let validGuest: [String: String?] = [
     for (name, message, publish) in cases {
         let fixture = try Fixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
-        let installed = ["Image": "kept", "initramfs.cpio.lz4": "kept", "guest-protocol": "\(GuestImage.protocolVersion)\n"]
+        let installed = ["dockma-kernel": "kept", "dockma-initrd.img": "kept", "guest-protocol": "\(GuestImage.protocolVersion)\n"]
         try fixture.publish(installed)
         try fixture.install()
         try publish(fixture)

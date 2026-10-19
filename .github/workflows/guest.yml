@@ -53,7 +53,7 @@ jobs:
         run: |
           name="dockma-linux-${GITHUB_SHA::12}-arm64.tar.gz"
           ls -l vm/out
-          tar -czf "$name" -C vm/out Image initramfs.cpio.lz4 guest-protocol
+          tar -czf "$name" -C vm/out dockma-kernel dockma-initrd.img guest-protocol
           echo "name=$name" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -83,7 +83,7 @@ jobs:
         run: |
           name="dockma-linux-${VERSION}-arm64.tar.gz"
           ls -l vm/out
-          tar -czf "$name" -C vm/out Image initramfs.cpio.lz4 guest-protocol
+          tar -czf "$name" -C vm/out dockma-kernel dockma-initrd.img guest-protocol
           echo "name=$name" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

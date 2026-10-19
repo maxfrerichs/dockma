@@ -45,7 +45,7 @@ if [ ! -f "$DOCKMA_DIR/guest/guest-protocol" ] && [ "$DOCKMA_DIR" != "$HOME/.doc
 	[ -f "$HOME/.dockma/guest/guest-protocol" ] ||
 		fail "no guest in $DOCKMA_DIR/guest; run: make install-guest DOCKMA_HOME=$DOCKMA_DIR"
 	mkdir -p "$DOCKMA_DIR/guest"
-	cp "$HOME/.dockma/guest/Image" "$HOME/.dockma/guest/initramfs.cpio.lz4" "$HOME/.dockma/guest/guest-protocol" "$DOCKMA_DIR/guest/"
+	cp "$HOME/.dockma/guest/dockma-kernel" "$HOME/.dockma/guest/dockma-initrd.img" "$HOME/.dockma/guest/guest-protocol" "$DOCKMA_DIR/guest/"
 fi
 
 step "start"

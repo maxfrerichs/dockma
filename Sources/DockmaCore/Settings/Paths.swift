@@ -44,9 +44,12 @@ public struct Paths: Sendable {
     public var dockerLog: URL { logs.appendingPathComponent("docker.log") }
     public var daemonLog: URL { logs.appendingPathComponent("daemon.log") }
     public var guest: URL { root.appendingPathComponent("guest", isDirectory: true) }
-    public var kernel: URL { guest.appendingPathComponent("Image") }
+    /// The guest kernel: an uncompressed arm64 Image, named as LinuxKit names
+    /// its kernel+initrd output.
+    public var kernel: URL { guest.appendingPathComponent("dockma-kernel") }
     /// The guest initramfs: a cpio archive compressed with legacy-format lz4.
-    public var initrd: URL { guest.appendingPathComponent("initramfs.cpio.lz4") }
+    /// The kernel detects the compression itself, so the name doesn't carry it.
+    public var initrd: URL { guest.appendingPathComponent("dockma-initrd.img") }
     /// The host↔guest protocol number the guest image was built for.
     public var guestProtocol: URL { guest.appendingPathComponent("guest-protocol") }
     /// Held (flock) by a running `dockma install`.

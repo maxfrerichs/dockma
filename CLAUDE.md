@@ -64,7 +64,7 @@ The core library lives in `Sources/DockmaCore/`, grouped by area. Rows from Daem
 ```sh
 make build                # swift build + ad-hoc codesign with dockma.entitlements (required to run the VM)
 make install              # signed release binary → ~/.local/bin/dockma (PREFIX=...)
-make guest                # build vm/out/{Image,initramfs.cpio.lz4} with any arm64 docker (buildx)
+make guest                # build vm/out/{dockma-kernel,dockma-initrd.img} with any arm64 docker (buildx)
 make install-guest        # copy guest artifacts to ~/.dockma/guest/
 dockma install            # or download the released guest of DockmaVersion.current (DOCKMA_RELEASE_URL overrides the source)
 make test                 # swift test (Swift Testing)

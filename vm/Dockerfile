@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
-# Builds the dockma guest: an uncompressed arm64 kernel Image and an lz4
-# initramfs. Build with `make guest`; outputs land in vm/out/.
+# Builds the dockma guest: an uncompressed arm64 kernel Image (dockma-kernel)
+# and an lz4 initramfs (dockma-initrd.img), named as LinuxKit names its
+# kernel+initrd output. Build with `make guest`; outputs land in vm/out/.
 
 ARG ALPINE=alpine:3.24
 ARG GOLANG=golang:1.27-alpine
@@ -49,7 +50,7 @@ COPY kernel/check-docker-config.sh /build/
 RUN sh /build/check-docker-config.sh /build/check-config.sh .config
 # /proc/version names dockma as the builder, not the BuildKit sandbox.
 RUN make ARCH=arm64 KBUILD_BUILD_USER=dockma KBUILD_BUILD_HOST=dockma.dev -j"$(nproc)" Image \
- && mkdir -p /out && cp arch/arm64/boot/Image /out/Image && cp .config /out/kernel.config
+ && mkdir -p /out && cp arch/arm64/boot/Image /out/dockma-kernel && cp .config /out/kernel.config
 
 # --- Guest agent -----------------------------------------------------------
 FROM ${GOLANG} AS agent
@@ -98,8 +99,8 @@ RUN chmod 0755 init etc/init.d/* usr/libexec/dockma-disk usr/libexec/dockma-motd
  && mkdir -p /out \
  && printf 'dir /dev 0755 0 0\nnod /dev/console 0600 0 0 c 5 1\nnod /dev/null 0666 0 0 c 1 3\n' > /tmp/devices \
  && { gen_init_cpio /tmp/devices; find . -mindepth 1 | sort | cpio -o -H newc --quiet; } \
-    | lz4 -l -9 -q -c >/out/initramfs.cpio.lz4 \
- && du -sh /rootfs /out/initramfs.cpio.lz4
+    | lz4 -l -9 -q -c >/out/dockma-initrd.img \
+ && du -sh /rootfs /out/dockma-initrd.img
 
 FROM scratch
 COPY --from=kernel /out/ /

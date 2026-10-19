@@ -8,7 +8,7 @@ public enum GuestRelease {
     static let repository = "maxfrerichs/dockma"
 
     /// The files a guest tarball holds, as `guest.yml` packs them.
-    static let files = ["Image", "initramfs.cpio.lz4", "guest-protocol"]
+    static let files = ["dockma-kernel", "dockma-initrd.img", "guest-protocol"]
 
     /// The name prefix of an install's staging directory in the state directory.
     static let stagingPrefix = ".guest-install-"

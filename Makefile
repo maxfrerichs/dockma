@@ -40,9 +40,9 @@ test:
 guest:
 	$(DOCKER) buildx build --platform linux/arm64 $(BUILDX_FLAGS) --output type=local,dest=vm/out vm
 
-install-guest: vm/out/Image vm/out/initramfs.cpio.lz4 vm/out/guest-protocol
+install-guest: vm/out/dockma-kernel vm/out/dockma-initrd.img vm/out/guest-protocol
 	mkdir -p $(GUEST_DIR)
-	cp vm/out/Image vm/out/initramfs.cpio.lz4 vm/out/guest-protocol $(GUEST_DIR)/
+	cp vm/out/dockma-kernel vm/out/dockma-initrd.img vm/out/guest-protocol $(GUEST_DIR)/
 
 # The e2e VM needs a guest: `make install-guest DOCKMA_HOME=$(E2E_HOME)`
 # installs a fresh build, or the script copies the one in ~/.dockma/guest.
