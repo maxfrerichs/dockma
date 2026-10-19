@@ -4,8 +4,16 @@ All notable changes to dockma are recorded here. The format follows [Keep a Chan
 
 ## Unreleased
 
+### Added
+- The guest kernel's configuration is readable at `/proc/config.gz`, so tools in containers (moby's `check-config.sh`, `k3s check-config`) can see which features the kernel has. It has no modules, so the configuration is the full list.
+
 ### Changed
 - The website lives at <https://dockma.dev>. The install command is `curl -fsSL https://dockma.dev/install.sh | sh`; the old `maxfrerichs.github.io/dockma/` address redirects there. The website lists the 0.4.0 features and describes the guest VM.
+
+### Fixed
+- k3s and k3d clusters work. The server exited seconds after its node became Ready, because the kernel had no VXLAN for flannel. kube-proxy's IPv6 rules failed on every sync, because ip6tables had no `MARK` target. Network policies were silently not enforced, because the kernel had no ipset.
+- kind clusters enforce NetworkPolicy. kindnet's policy controller needs nfqueue and conntrack labels, which the kernel lacked.
+- iptables-nft in containers has the `REJECT`, `LOG`, `NFLOG`, `CT`, `CONNMARK` and `TCPMSS` targets, the `recent`, `owner` and `set` matches, and, for IPv6, the `MARK` target and `addrtype` match. A rule that used one of these failed to load, and so did the rest of an `iptables-restore` batch that contained it. The kernel also has ipset and VXLAN interfaces, and lists conntrack entries over netlink (`conntrack -L`). This needs the new guest (`dockma install`, or `make guest install-guest`) and `dockma restart`.
 
 ## 0.4.0 – 2026-10-17
 
