@@ -85,13 +85,22 @@ To run the daemon in the foreground, stop the launchd job first (`dockma stop`),
 
 Changes under `vm/` only take effect after `make guest install-guest` followed by `dockma restart`. Changes to the Swift daemon need `make build` and a restart.
 
+To iterate on `vm/kernel/dockma.config` without a full `make guest`, build only the source stage and rerun the config steps. Review every option the diff newly enables, including ones pulled in by `select` or `default`:
+
+```sh
+docker buildx build --platform linux/arm64 --target kernel-src --load -t dockma-kernel-src vm
+docker run --rm -i dockma-kernel-src sh -c 'cd /build/linux && cat >/build/dockma.config && make ARCH=arm64 tinyconfig >/dev/null && scripts/kconfig/merge_config.sh -m .config /build/dockma.config >/dev/null && make ARCH=arm64 olddefconfig >/dev/null && cat .config' <vm/kernel/dockma.config >new.config
+diff <(grep ^CONFIG_ vm/out/kernel.config | sort) <(grep ^CONFIG_ new.config | sort)
+```
+
 No linter or formatter is configured for the code. Lint workflows with `docker run --rm -v "$PWD:/repo:ro" -w /repo rhysd/actionlint`.
 
 ## Gotchas
 
 - **`swift build` and `swift test` strip the entitlement.** Both relink the binary unsigned (`make test` re-signs it afterwards). Without `com.apple.security.virtualization` the daemon can't start a VM, and `dockma start` refuses to run. Always use `make build` or `make install`.
 - **launchd runs the binary you started it with.** The plist's `ProgramArguments` is the absolute path of the binary that ran `dockma start`. A later unsigned `swift build` breaks the daemon on its next restart.
-- **Run e2e checks against dockma's socket explicitly.** This machine also runs Lima, and an exported `DOCKER_HOST` overrides docker contexts. Use `DOCKER_HOST=unix://$HOME/.dockma/docker.sock`, as `scripts/e2e.sh` does, or Lima may be the one answering.
+- **Run e2e checks against dockma's socket explicitly.** This machine also runs Lima, and an exported `DOCKER_HOST` overrides docker contexts. Use `DOCKER_HOST=unix://$HOME/.dockma/docker.sock`, as `scripts/e2e.sh` does, or Lima may be the one answering. Against a separate VM (`DOCKMA_HOME=~/.dockma-e2e`), export `DOCKMA_HOME` for every `dockma` command too, `dockma shell` included; without it they reach the user's VM.
+- **Only the home directory is shared with the VM.** `docker run -v` with a host path outside it (`/tmp`, `/private/tmp`) mounts an empty directory without an error. Pass files in with `tar c … | docker run -i … tar x`.
 - **Code that blocks on the cooperative pool must not wait for `DispatchQueue.global()`.** That queue shares its per-CPU thread budget with the Swift cooperative pool. On the 3-CPU CI runner, three sync tests blocked in `Subprocess.run` waited on a `global()` block that never got a thread, and the whole test process froze. Use a private serial queue (it always gets a thread) or a dedicated `Thread`; async tests run blocking calls through `runOnThread` (`Tests/DockmaCoreTests/BlockingWork.swift`). To find a hang like this, `cli.yml` samples the test process after 5 minutes.
 - **The daemon must run the main RunLoop, not `dispatchMain()`.** VZ objects and the `Daemon` are `@MainActor`. Under `dispatchMain()`, main-queue blocks run on a worker thread and Swift 6 isolation checks trap.
 - **The daemon's exit code drives launchd.** `KeepAlive.SuccessfulExit=false` means:
@@ -104,10 +113,12 @@ No linter or formatter is configured for the code. Lint workflows with `docker r
   - An agent that connects during a stop still gets `shutdown`, but its deadline is the request time plus the grace. A reconnecting agent can't postpone the hard stop.
   - `bootout`'s timeout (40 s) must stay above `shutdownGrace`, or `dockma stop` gives up before the daemon exits.
 - **Guest consoles are TTYs.** Logs arrive with `\r\n` line endings, which Swift treats as a single Character, so split them with `isNewline`.
+- **The two virtio consoles depend on probe order.** `hvc0` is the console log and dockerd writes to `/dev/hvc1`. `driver_async_probe=virtio-pci` probes the virtio devices in parallel and saves about 10 ms of boot, but numbers the consoles at random: on alternate boots dockerd's log lands in `console.log`. It needs named console ports first.
 - **Kernel config gates in the Dockerfile.**
   - Every option in `vm/kernel/dockma.config` must survive `olddefconfig`. A dropped option means an unmet dependency. Every `# CONFIG_X is not set` line must stay disabled; another option's `select` can turn it back on.
   - `vm/kernel/check-docker-config.sh` enforces moby's required list. It exempts the iptables/xtables options because dockerd runs with `firewall-backend: nftables`, which needs the `nft` binary.
   - Without modules, a missing option shows up only when a container asks for it. `scripts/e2e.sh` probes the ones kube-proxy, k3s and CNIs use. Check a new option with `/proc/config.gz` in the guest.
+  - An enabled option doesn't prove the feature works: verify it with the workload or the e2e probe. iptables-nft translates some targets into native nftables expressions, so `-j NFLOG` needs `NFT_LOG`, not only `NETFILTER_XT_TARGET_NFLOG`.
   - `IP_NF_IPTABLES` and `IP6_NF_IPTABLES` are not the legacy tables (those are `IP*_NF_IPTABLES_LEGACY`, kept off). They register each family's xt extensions for iptables-nft: without `IP6_NF_IPTABLES`, ip6tables has no `MARK` target or `addrtype` match, even with `NETFILTER_XT_MARK=y`.
 - **Stage-0 `/init` moves the initramfs into a tmpfs and runs `switch_root`.** runc can't `pivot_root` out of rootfs.
 - **BuildKit forbids `mknod`.** Device nodes come from the kernel's `gen_init_cpio`.
