@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// The same bytes are asserted in Tests/dockmaTests/ShellProtocolTests.swift.
+// The same bytes are asserted in Tests/DockmaCoreTests/ShellProtocolTests.swift.
 func TestResizeFrameGolden(t *testing.T) {
 	payload := make([]byte, 4)
 	binary.BigEndian.PutUint16(payload[0:2], 24)
@@ -23,7 +23,7 @@ func TestResizeFrameGolden(t *testing.T) {
 	}
 }
 
-// The same bytes are asserted in Tests/dockmaTests/ShellProtocolTests.swift.
+// The same bytes are asserted in Tests/DockmaCoreTests/ShellProtocolTests.swift.
 func TestWindowFrameGolden(t *testing.T) {
 	if got := hex.EncodeToString(encodeFrame(frameWindow, uint32Payload(stdinWindow))); got != "15000000040004"+"0000" {
 		t.Fatalf("window frame = %s", got)

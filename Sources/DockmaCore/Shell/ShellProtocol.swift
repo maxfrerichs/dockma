@@ -26,7 +26,7 @@ public struct ShellStart: Codable, Equatable, Sendable {
 
 /// One frame of the shell protocol on vsock port 1027:
 /// `[type u8][length u32 big-endian][payload]`. Mirrors the constants in
-/// vm/agent/shell.go; keep the two in sync.
+/// vm/agent/shell.go; keep the two in sync. Specified in docs/shell-protocol.md.
 public enum ShellFrame: Equatable, Sendable {
     // client → agent
     case start(ShellStart)
