@@ -9,6 +9,7 @@ All notable changes to dockma are recorded here. The format follows [Keep a Chan
 
 ### Changed
 - The website lives at <https://dockma.dev>. The install command is `curl -fsSL https://dockma.dev/install.sh | sh`; the old `maxfrerichs.github.io/dockma/` address redirects there. The website lists the 0.4.0 features and describes the guest VM.
+- The guest kernel identifies itself as dockma's: `uname -r`, `docker info` and `dockma status` show `6.18.57-dockma`, and `/proc/version` names `dockma@dockma.dev` as the builder.
 
 ### Fixed
 - k3s and k3d clusters work. The server exited seconds after its node became Ready, because the kernel had no VXLAN for flannel. kube-proxy's IPv6 rules failed on every sync, because ip6tables had no `MARK` target. Network policies were silently not enforced, because the kernel had no ipset.

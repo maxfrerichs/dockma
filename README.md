@@ -159,7 +159,7 @@ $ dockma status
 state:    running
 docker:   ready (/Users/you/.dockma/docker.sock)
 uptime:   12m 4s
-vm:       6 CPUs, 4096 MiB, kernel 6.18.57
+vm:       6 CPUs, 4096 MiB, kernel 6.18.57-dockma
 agent:    connected 0.5.0
 ports:    8080, 1053/udp
 daemon:   pid 55658
@@ -173,7 +173,7 @@ dockma:~# cat /proc/meminfo | head -3
 dockma:~# exit
 
 $ dockma shell -- uname -r          # run one command; stdout, stderr and exit code pass through
-6.18.57
+6.18.57-dockma
 $ dockma shell -- sh -c 'ls /var/lib/docker' | wc -l
 $ echo data | dockma shell -- cat   # stdin is forwarded
 ```
