@@ -78,12 +78,12 @@ private let validGuest: [String: String?] = [
 }
 
 @Test func releaseURLDefaultsToGitHubAndCanBeOverridden() {
-    #expect(GuestRelease.assetName(version: "0.4.0") == "dockma-linux-0.4.0-arm64.tar.gz")
-    #expect(GuestRelease.baseURL(version: "0.4.0", environment: [:]).absoluteString
-        == "https://github.com/maxfrerichs/dockma/releases/download/0.4.0/")
-    #expect(GuestRelease.baseURL(version: "0.4.0", environment: ["DOCKMA_RELEASE_URL": "file:///tmp/rel"]).absoluteString
+    #expect(GuestRelease.assetName(version: "0.5.0") == "dockma-linux-0.5.0-arm64.tar.gz")
+    #expect(GuestRelease.baseURL(version: "0.5.0", environment: [:]).absoluteString
+        == "https://github.com/maxfrerichs/dockma/releases/download/0.5.0/")
+    #expect(GuestRelease.baseURL(version: "0.5.0", environment: ["DOCKMA_RELEASE_URL": "file:///tmp/rel"]).absoluteString
         == "file:///tmp/rel")
-    #expect(GuestRelease.baseURL(version: "0.4.0", environment: ["DOCKMA_RELEASE_URL": "/tmp/rel"]).absoluteString
+    #expect(GuestRelease.baseURL(version: "0.5.0", environment: ["DOCKMA_RELEASE_URL": "/tmp/rel"]).absoluteString
         == "file:///tmp/rel/")
 }
 

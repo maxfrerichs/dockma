@@ -4,6 +4,8 @@ All notable changes to dockma are recorded here. The format follows [Keep a Chan
 
 ## Unreleased
 
+## 0.5.0 – 2026-10-19
+
 ### Added
 - The guest kernel's configuration is readable at `/proc/config.gz`, so tools in containers (moby's `check-config.sh`, `k3s check-config`) can see which features the kernel has. It has no modules, so the configuration is the full list.
 
