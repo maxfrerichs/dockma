@@ -33,7 +33,7 @@ scripts/bench-compare.py --suites boot,disk,mount,network,workload --rounds 6
 scripts/bench-compare.py --suites idle --rounds 2
 ```
 
-`DOCKMA=<binary>` benchmarks another dockma build, such as a branch's `.build/debug/dockma`. The daily `~/.dockma` is always restarted with the installed `dockma`, because launchd keeps the binary that started it.
+`DOCKMA=<binary>` benchmarks another dockma build, such as a branch's `.build/debug/dockma`. The daily `~/.dockma` is always restarted with the `dockma` on `PATH`. launchd keeps the binary that started a job, so if your daily VM runs a different binary, its job afterwards points at the one on `PATH`.
 
 Before a run: plug in to power, turn off Low Power Mode, and quit other heavy apps. `meta.json` records the power and thermal state.
 

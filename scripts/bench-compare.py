@@ -36,6 +36,7 @@ GIT_URL = "https://www.kernel.org/pub/software/scm/git/git-2.50.0.tar.xz"
 GIT_SHA256 = "dff3c000e400ace3a63b8a6f8b3b76b88ecfdffd4504a04aba4248372cdec045"
 GIT_DIR = "git-2.50.0"
 SUITES = ["boot", "idle", "disk", "mount", "network", "workload"]
+IMAGE_SUITES = {"disk", "mount", "network", "workload"}
 PORT = 18081
 DOCKMA = os.environ.get("DOCKMA", "dockma")  # e.g. a branch's .build/debug/dockma
 
@@ -332,7 +333,9 @@ def suite_mount(engine, rec, args):
                           "i=0; while [ ! -e /n/f ] && [ $i -lt 10000 ]; do usleep 1000; i=$((i+1)); done; "
                           "[ -e /n/f ] && echo seen; wait"],
                          env=engine.env(), stdout=subprocess.PIPE, text=True)
-    assert p.stdout.readline().strip() == "ready"
+    if p.stdout.readline().strip() != "ready":
+        p.kill()
+        raise RuntimeError(f"{engine.name}: the notify container did not start")
     time.sleep(0.5)  # lets inotifywait set its watch
     t0 = time.monotonic()
     (notify / "f").write_text("x")
@@ -366,10 +369,13 @@ def suite_network(engine, rec, args):
 
         if shutil.which("iperf3"):
             server = subprocess.Popen(["iperf3", "-s", "-1", "-p", "18082"], stdout=subprocess.DEVNULL)
-            time.sleep(0.5)
-            out = json.loads(engine.docker("run", "--rm", "--add-host", f"host.docker.internal:{engine.host_gateway}", TOOLS,
-                                           "iperf3", "-c", "host.docker.internal", "-p", "18082", "-t", "10", "-J"))
-            server.wait(timeout=30)
+            try:
+                time.sleep(0.5)
+                out = json.loads(engine.docker("run", "--rm", "--add-host", f"host.docker.internal:{engine.host_gateway}", TOOLS,
+                                               "iperf3", "-c", "host.docker.internal", "-p", "18082", "-t", "10", "-J"))
+                server.wait(timeout=30)
+            finally:
+                server.kill()
             rec(engine, "network", "container → macOS (iperf3)", out["end"]["sum_received"]["bits_per_second"] / 1e9, "Gbit/s", "higher")
 
             engine.docker("run", "-d", "--name", "dockma-bench-udp", "-p", "18083:5201", "-p", "18083:5201/udp", TOOLS, "iperf3", "-s")
@@ -412,7 +418,7 @@ def suite_workload(engine, rec, args):
     finally:
         engine.docker(*compose, "down", "-v", check=False)
 
-    time.sleep(args.idle_settle)
+    time.sleep(args.reclaim_settle)
     rec(engine, "workload", "host memory footprint after workload", footprint(engine)[0], "MiB", "lower")
 
 
@@ -461,7 +467,8 @@ def host_meta():
 def daily_engines(bench):
     """Engines not under test that are running now, as (stop, start) pairs."""
     found = []
-    daily = Dockma(HOME / ".dockma", binary="dockma")  # launchd keeps the binary that started it
+    # launchd keeps the binary that started it, so this rewrites the job to `dockma` on PATH.
+    daily = Dockma(HOME / ".dockma", binary="dockma")
     if daily.is_up():
         found.append(("dockma ~/.dockma", daily.stop, daily.start))
     if shutil.which("limactl"):
@@ -483,6 +490,8 @@ def main():
     ap.add_argument("--boot-runs", type=int, default=2, help="boots per engine per round (default 2)")
     ap.add_argument("--idle-settle", type=int, default=120, help="seconds before measuring idle footprint")
     ap.add_argument("--idle-sample", type=int, default=300, help="seconds of idle CPU sampling")
+    ap.add_argument("--reclaim-settle", type=int, default=120,
+                    help="seconds after the workload before measuring how much memory the engine gave back")
     ap.add_argument("--out", type=Path, default=WORK / "results" / time.strftime("%Y%m%d-%H%M%S"))
     ap.add_argument("--prepare", action="store_true", help="build fixtures with the first engine, then exit")
     ap.add_argument("--wipe-orbstack", action="store_true",
@@ -512,10 +521,10 @@ def main():
                 images=json.loads((CACHE / "images.json").read_text()), engines={})
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))
     daily = daily_engines(args.engines.split(","))
-    for name, stop, _ in daily:
-        log(f"stopping daily engine {name}")
-        stop()
     try:
+        for name, stop, _ in daily:
+            log(f"stopping daily engine {name}")
+            stop()
         for r in range(args.rounds):
             rec.round = r
             order = engines[r % len(engines):] + engines[:r % len(engines)]
@@ -531,8 +540,9 @@ def main():
                 engine.assert_identity()
                 if "idle" in suites:
                     suite_idle(engine, rec, args)
-                engine.docker("system", "prune", "-af", "--volumes")
-                rec(engine, "workload", "docker load (4 images)", timed(lambda: engine.docker("load", "-q", "-i", str(CACHE / "images.tar"))), "s", "lower")
+                if IMAGE_SUITES & set(suites):
+                    engine.docker("system", "prune", "-af", "--volumes")
+                    rec(engine, "workload", "docker load (4 images)", timed(lambda: engine.docker("load", "-q", "-i", str(CACHE / "images.tar"))), "s", "lower")
                 if engine.name not in meta["engines"]:
                     meta["engines"][engine.name] = dict(info=json.loads(engine.docker("info", "--format", "{{json .}}")),
                                                         config=engine.config())
@@ -550,7 +560,10 @@ def main():
                 log(f"could not stop {engine.name}: {e}")
         for name, _, start in daily:
             log(f"restarting daily engine {name}")
-            start()
+            try:
+                start()
+            except Exception as e:
+                log(f"could not restart {name}: {e}")
     log(f"results in {args.out}; summarize with scripts/bench-report.py {args.out}")
 
 

@@ -43,10 +43,13 @@ def cells(better, per):
     pick = max if better == "higher" else min
     best = pick(per, key=lambda e: per[e][1])
     bq1, _, bq3, _ = per[best]
+    tie = len({med for _, med, _, _ in per.values()}) == 1
     out = {}
     for e, (q1, med, q3, n) in per.items():
         text = f"{num(med)} ({num(q1)}–{num(q3)}, n={n})"
-        if e == best:
+        if tie:
+            pass  # equal medians: no best to mark
+        elif e == best:
             text = f"**{text}**"
         elif q1 <= bq3 and bq1 <= q3:
             text = f"≈ {text}"
@@ -79,6 +82,8 @@ def self_test():
     assert per["c"][3] == 2
     c = cells("lower", per)
     assert c["a"].startswith("**") and c["b"].startswith("≈") and not c["c"].startswith(("≈", "**")), c
+    tie = cells("higher", {"a": (0, 0, 0, 3), "b": (0, 0, 0, 3)})
+    assert not any(t.startswith(("**", "≈")) for t in tie.values()), tie
     print("ok")
 
 
