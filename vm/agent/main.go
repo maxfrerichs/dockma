@@ -135,6 +135,8 @@ func serve(port uint32, handle func(net.Conn)) {
 			c, err := l.Accept()
 			if err != nil {
 				log.Printf("accept vsock:%d: %v", port, err)
+				// A persistent error mustn't spin listen and accept.
+				time.Sleep(100 * time.Millisecond)
 				break
 			}
 			if !isHostPeer(c.RemoteAddr()) {
@@ -170,7 +172,13 @@ func pipe(a, b net.Conn, aReader, bReader io.Reader) {
 	var wg sync.WaitGroup
 	copyHalf := func(dst net.Conn, src io.Reader) {
 		defer wg.Done()
-		io.Copy(dst, src)
+		if _, err := io.Copy(dst, src); err != nil {
+			// Not EOF, so not a half-close: an idle peer would leave the
+			// other direction blocked forever.
+			a.Close()
+			b.Close()
+			return
+		}
 		if hc, ok := dst.(halfCloser); ok {
 			hc.CloseWrite()
 		} else {

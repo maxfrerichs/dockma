@@ -9,6 +9,9 @@ All notable changes to dockma are recorded here. The format follows [Keep a Chan
 - The guest's logs leave through one virtio console device with named ports, "console" and "docker", instead of two console devices told apart by probe order. dockerd writes its log directly to the "docker" port, without a TTY or a wrapper pipe. The VM has one PCI device fewer, which shortens kernel boot by about 8 ms. This changes the guest protocol to 4: install the matching guest with `dockma install` (install.sh does this), or `make guest install-guest` for a source build.
 - The guest's kernel and initramfs are named as LinuxKit names its kernel+initrd output: `~/.dockma/guest/dockma-kernel` and `dockma-initrd.img` (were `Image` and `initramfs.cpio.lz4`). `dockma install`, which install.sh runs, puts the new files in place. A CLI built from source needs `make guest install-guest` once; until then `dockma start` refuses with that hint.
 
+### Fixed
+- A tunnelled connection whose client failed mid-stream (a reset rather than a close) no longer stays open in the guest while the container's side is idle; the agent now closes both ends. An agent whose vsock accept kept failing no longer re-listens in a tight loop. Needs the new guest (`dockma install`, or `make guest install-guest`).
+
 ## 0.5.0 – 2026-10-19
 
 ### Added
