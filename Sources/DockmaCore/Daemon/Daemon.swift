@@ -8,7 +8,9 @@ public final class Daemon {
     /// The deadlines must stay ordered: dockerd's own shutdown (15 s with
     /// default container stop timeouts) < the guest shutdown script's wait
     /// (20 s) < this < the plist's `ExitTimeOut` (30 s) < `bootout` (40 s).
-    static let shutdownGrace: Duration = .seconds(25)
+    nonisolated static let shutdownGrace: Duration = .seconds(25)
+    /// How long a stop waits for an agent that isn't connected to dial in.
+    nonisolated static let agentConnectGrace: Duration = .seconds(2)
     static let timeSyncInterval: Duration = .seconds(30)
     /// How often ports that failed to bind are tried again.
     static let portRetryInterval: Duration = .seconds(10)
@@ -131,9 +133,7 @@ public final class Daemon {
                 // still power the guest off cleanly.
                 if self.agent?.send(.shutdown) == true, let stopRequestedAt = self.stopRequestedAt {
                     Log.info("agent connected during stop, asked the guest to power off")
-                    // Counted from the stop request, so an agent that keeps
-                    // reconnecting can't postpone the hard stop.
-                    self.scheduleForceStop(at: stopRequestedAt + Self.shutdownGrace)
+                    self.scheduleForceStop(at: Self.forceStopDeadline(requestedAt: stopRequestedAt, isShutdownSent: true))
                 }
                 return
             }
@@ -274,12 +274,18 @@ public final class Daemon {
         // guest doesn't run). A booting guest's agent dials in within about a
         // second and gets the request then (see onConnect); otherwise only a
         // short grace period is useful.
-        if agent?.send(.shutdown) == true {
-            scheduleForceStop(at: now + Self.shutdownGrace)
-        } else {
-            Log.info("agent not connected; stopping VM in 2 s unless it connects")
-            scheduleForceStop(at: now + .seconds(2))
-        }
+        let isShutdownSent = agent?.send(.shutdown) == true
+        if !isShutdownSent { Log.info("agent not connected; stopping VM in \(Self.agentConnectGrace) unless it connects") }
+        scheduleForceStop(at: Self.forceStopDeadline(requestedAt: now, isShutdownSent: isShutdownSent))
+    }
+
+    /// When the VM is hard-stopped after a stop requested at `requestedAt`.
+    /// Always counted from the request, so an agent that keeps reconnecting
+    /// can't postpone the hard stop.
+    nonisolated static func forceStopDeadline(
+        requestedAt: ContinuousClock.Instant, isShutdownSent: Bool
+    ) -> ContinuousClock.Instant {
+        requestedAt + (isShutdownSent ? shutdownGrace : agentConnectGrace)
     }
 
     /// Hard-stops the VM at `deadline` unless the guest powers off first,

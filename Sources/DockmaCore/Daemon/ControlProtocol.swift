@@ -195,6 +195,7 @@ public enum DockerPing {
         var chunk = [UInt8](repeating: 0, count: 4096)
         while true {
             let n = chunk.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
+            if n < 0 && errno == EINTR { continue }
             if n <= 0 { break }
             response.append(contentsOf: chunk[0..<n])
         }
