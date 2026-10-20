@@ -34,7 +34,7 @@ The guest image carries a protocol number: `vm/agent/protocol`, installed as `~/
 
 The agent accepts vsock connections only from the host (CID 2, `isHostPeer`), and the kernel has `VSOCKETS_LOOPBACK` off, so containers can't reach these ports. The host's port 1025 can't tell the agent from another process in the guest (same CID); the README documents that.
 
-The home directory is shared via virtiofs (tag `home`) and mounted in the guest **at the same host path**. The path is passed percent-encoded as `dockma.home=` on the kernel cmdline and decoded in `rcS`, like `dockma.state=` (the state directory, where the guest reads the user's `daemon.json`, `ca-certificates/` and `certs.d/`; only visible when it lies under home). The cmdline also carries `panic=5`, so a panicked guest reboots. VZ reboots a Linux guest in place (no `guestDidStop`, same daemon pid); the agent reconnects. An open `dockma shell` session does not end when that happens: its connection stays open until the client next writes (see `docs/shell-protocol.md`). Rosetta is the virtiofs tag `rosetta`, registered with binfmt_misc using flags `CF`.
+The home directory is shared via virtiofs (tag `home`) and mounted in the guest **at the same host path**. The path is passed percent-encoded as `dockma.home=` on the kernel cmdline and decoded in `rcS`, like `dockma.state=` (the state directory, where the guest reads the user's `daemon.json`, `ca-certificates/` and `certs.d/`; only visible when it lies under home). The cmdline also carries `panic=5`, so a panicked guest reboots, and `rcupdate.rcu_expedited=1`, which takes about 50 ms off each `docker run` (container setup and teardown wait on RCU grace periods). VZ reboots a Linux guest in place (no `guestDidStop`, same daemon pid); the agent reconnects. An open `dockma shell` session does not end when that happens: its connection stays open until the client next writes (see `docs/shell-protocol.md`). Rosetta is the virtiofs tag `rosetta`, registered with binfmt_misc using flags `CF`.
 
 ## Source map
 
@@ -69,9 +69,10 @@ make install-guest        # copy guest artifacts to ~/.dockma/guest/
 dockma install            # or download the released guest of DockmaVersion.current (DOCKMA_RELEASE_URL overrides the source)
 make test                 # swift test (Swift Testing)
 make e2e                  # build + scripts/e2e.sh against its own VM in ~/.dockma-e2e (E2E_HOME); the user's VM keeps running
-scripts/bench.sh          # boot time with a phase breakdown, plus network throughput (restarts the user's VM RUNS times; RUNS=0 skips boot, NETWORK=0 skips network)
-DISK=1 RUNS=0 NETWORK=0 scripts/bench.sh                                  # disk: fio and per-step build overhead on LAYER_BASE (steps parsed by scripts/bench-build-steps.py)
-ENGINE_SOCKET=$HOME/.lima/default/sock/docker.sock DISK=1 scripts/bench.sh   # same network/disk phases against another engine, as a baseline
+scripts/bench.sh          # boot time with a phase breakdown (restarts the user's VM RUNS times; RUNS=0 skips boot)
+DISK=1 RUNS=0 scripts/bench.sh   # per-step build overhead on LAYER_BASE with guest I/O pressure (steps parsed by scripts/bench-build-steps.py)
+scripts/bench-compare.py --prepare && scripts/bench-compare.py   # dockma vs Lima vs OrbStack, method in docs/benchmarks.md; stops daily engines, restores them at exit
+scripts/bench-report.py <results dir>                            # median/IQR tables from raw.jsonl
 swift test --filter DockmaCoreTests.planIsEmptyWhenNothingChanged   # one test
 ```
 

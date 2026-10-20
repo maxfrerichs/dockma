@@ -1,41 +1,29 @@
 #!/bin/sh
-# Boot, network and disk benchmark against a real dockma VM. Restarts the VM
-# RUNS times, so it is not part of e2e. Usage: DOCKMA=<binary> RUNS=5 scripts/bench.sh
-# RUNS=0 skips the boot part; NETWORK=0 skips the network part; DISK=1 adds the
-# disk part (fio, plus per-step build overhead on LAYER_BASE).
-# DOCKER_HOST is pinned to dockma's socket so another engine (Lima, Docker
-# Desktop) can't answer instead. ENGINE_SOCKET=<path> points the network and
-# disk parts at another engine on purpose, for a baseline; boot and guest I/O
-# pressure are then skipped.
+# dockma-only diagnostics against a real dockma VM: boot time with a phase
+# breakdown, and with DISK=1 per-step build overhead on LAYER_BASE with the
+# guest's I/O pressure. Restarts the VM RUNS times, so it is not part of e2e.
+# Usage: DOCKMA=<binary> RUNS=5 scripts/bench.sh (RUNS=0 skips boot).
+# Comparisons with other engines live in scripts/bench-compare.py.
 set -eu
 
 DOCKMA=${DOCKMA:-dockma}
 DOCKMA_DIR=${DOCKMA_HOME:-$HOME/.dockma}
 RUNS=${RUNS:-5}
-NETWORK=${NETWORK:-1}
 DISK=${DISK:-0}
 LAYER_BASE=${LAYER_BASE:-ddev/ddev-webserver:v1.25.4}
-ENGINE_SOCKET=${ENGINE_SOCKET:-$DOCKMA_DIR/docker.sock}
-export DOCKER_HOST="unix://$ENGINE_SOCKET"
-IS_DOCKMA=0
-[ "$ENGINE_SOCKET" = "$DOCKMA_DIR/docker.sock" ] && IS_DOCKMA=1
-[ "$IS_DOCKMA" = 1 ] || RUNS=0
-PORT=18081
-IMAGE=dockma-bench
+# Pinned to dockma's socket so another engine (Lima, Docker Desktop) can't answer instead.
+export DOCKER_HOST="unix://$DOCKMA_DIR/docker.sock"
 HERE=$(cd "$(dirname "$0")" && pwd)
 step() { echo "--- $*"; }
 
 cleanup() {
-	docker rm -f dockma-bench-iperf dockma-bench-http >/dev/null 2>&1 || true
 	docker rmi dockma-bench-layers >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-# The guest's I/O pressure totals in microseconds, "some full"; empty off
-# dockma or when the shell can't read them, so a failed reading never ends
-# the benchmark.
+# The guest's I/O pressure totals in microseconds, "some full"; empty when
+# the shell can't read them, so a failed reading never ends the benchmark.
 io_pressure() {
-	[ "$IS_DOCKMA" = 1 ] || return 0
 	{ "$DOCKMA" shell -T -- cat /proc/pressure/io 2>/dev/null || true; } |
 		sed -n 's/.*total=\([0-9]*\).*/\1/p' | tr '\n' ' '
 }
@@ -136,29 +124,7 @@ row("CLI overhead", returned[-1] - ready[-1])
 PY
 fi
 
-step "bench image"
-docker build -q -t "$IMAGE" - >/dev/null <<'EOF'
-FROM alpine:3.24
-RUN apk add --no-cache iperf3 busybox-extras fio
-EOF
-
 if [ "$DISK" = 1 ]; then
-	step "disk: sequential write in a container (1 GiB, fsync at end)"
-	p0=$(io_pressure)
-	# Captured first: sh has no pipefail, so a failing fio would surface only
-	# as a JSON error from the parser.
-	out=$(docker run --rm "$IMAGE" fio --name=seq --directory=/tmp --rw=write --bs=1m --size=1g \
-		--end_fsync=1 --output-format=json)
-	echo "$out" | python3 -c 'import json, sys; w = json.load(sys.stdin)["jobs"][0]["write"]; print("  %.0f MB/s" % (w["bw_bytes"] / 1e6))'
-	pressure_delta "$p0" "$(io_pressure)"
-
-	step "disk: 4 KiB random writes, fsync after each (20 s)"
-	p0=$(io_pressure)
-	out=$(docker run --rm "$IMAGE" fio --name=sync --directory=/tmp --rw=randwrite --bs=4k --size=256m \
-		--fsync=1 --runtime=20 --time_based --output-format=json)
-	echo "$out" | python3 -c 'import json, sys; w = json.load(sys.stdin)["jobs"][0]["write"]; print("  %.0f IOPS" % w["iops"])'
-	pressure_delta "$p0" "$(io_pressure)"
-
 	step "disk: pull $LAYER_BASE"
 	start=$(date +%s)
 	docker pull -q "$LAYER_BASE" >/dev/null
@@ -173,23 +139,3 @@ if [ "$DISK" = 1 ]; then
 	echo "  total $(($(date +%s) - start)) s"
 	pressure_delta "$p0" "$(io_pressure)"
 fi
-
-[ "$NETWORK" = 1 ] || exit 0
-
-step "network: container to container over the bridge (iperf3, 10 s)"
-docker run -d --name dockma-bench-iperf "$IMAGE" iperf3 -s >/dev/null
-ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' dockma-bench-iperf)
-sleep 1
-docker run --rm "$IMAGE" iperf3 -c "$ip" -t 10 -J |
-	python3 -c 'import json, sys; print("  %.2f Gbit/s" % (json.load(sys.stdin)["end"]["sum_received"]["bits_per_second"] / 1e9))'
-
-step "network: published port to macOS (1 GiB over HTTP, 3 runs)"
-docker run -d --name dockma-bench-http --tmpfs /w:size=1100m -p "$PORT:8080" "$IMAGE" \
-	sh -c 'head -c 1073741824 /dev/zero >/w/blob && exec httpd -f -p 8080 -h /w' >/dev/null
-for _ in $(seq 1 100); do
-	curl -sfI -o /dev/null "http://127.0.0.1:$PORT/blob" && break
-	sleep 0.2
-done
-for _ in 1 2 3; do
-	curl -sf -o /dev/null -w '%{speed_download}\n' "http://127.0.0.1:$PORT/blob"
-done | python3 -c 'import statistics, sys; print("  median %.2f Gbit/s" % (statistics.median(float(l) for l in sys.stdin) * 8 / 1e9))'

@@ -320,7 +320,8 @@ make guest          # rebuild the guest; also runs the agent's go vet / go test
 make install-guest  # copy the rebuilt guest to $DOCKMA_HOME/guest (default ~/.dockma/guest)
 make site           # build the website into site/public (needs Hugo)
 make site-serve     # preview the website locally
-scripts/bench.sh    # boot and network benchmark; restarts the VM RUNS times (default 5)
+scripts/bench.sh    # boot phase breakdown; restarts the VM RUNS times (default 5)
+scripts/bench-compare.py  # dockma vs Lima vs OrbStack; see docs/benchmarks.md
 ```
 
 `scripts/e2e.sh` pins `DOCKER_HOST` to dockma's socket and checks:
@@ -362,8 +363,10 @@ vm/rootfs/                init scripts, inittab, dockerd config, DHCP hook
 vm/agent/                 dockma-agent (Go) with tests
 vm/tests/                 guest script tests, run during the guest build
 scripts/e2e.sh            end-to-end test
-scripts/bench.sh          boot, network and disk benchmark (restarts the VM)
+scripts/bench.sh          boot phase breakdown and build-step diagnostics (restarts the VM)
 scripts/bench-build-steps.py  per-step build times and extracted layers, for bench.sh
+scripts/bench-compare.py  benchmark against Lima and OrbStack; bench-report.py summarizes it
+scripts/bench-fixtures/   pinned workloads for bench-compare.py
 site/                     website (Hugo): templates, data, fonts; deployed to GitHub Pages by .github/workflows/pages.yml
 scripts/site-prepare.py   derives the site's version facts (vm/Dockerfile) and command reference (docc file)
 scripts/release-notes.py  prints a version's CHANGELOG.md section, for release.yml
