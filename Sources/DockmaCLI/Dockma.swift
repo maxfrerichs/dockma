@@ -77,38 +77,7 @@ struct Start: ParsableCommand {
 
         let style = TerminalStyle.standardOutput()
         let agent = LaunchAgent(paths: paths, executable: currentExecutable())
-        try migrateLegacyJob(of: agent)
-        var job = agent.state()
-        if job.isLoaded, job.pid != nil {
-            if DockerPing.isResponding(socketPath: paths.dockerSocket.path) {
-                print(style.success("dockma is already running"))
-                return
-            }
-            if (try? ControlClient.status(paths: paths))?.state == .stopping {
-                print("Waiting for the previous VM to stop…")
-                try agent.bootout()
-                job = agent.state()
-            }
-        }
-        if job.isLoaded && job.pid == nil {
-            // Left over from a failed start or a crash; reload the plist.
-            try agent.bootout()
-            job = agent.state()
-        }
-        let logs: [LogTail]
-        if job.isLoaded {
-            // A daemon that is already booting has rotated its logs.
-            logs = lifecycleLogs(paths: paths, fromStart: true)
-        } else {
-            if ControlClient.isDaemonAnswering(paths: paths) {
-                print(style.success("dockma is already running") + " (started outside launchd with `dockma daemon`)")
-                return
-            }
-            // Until the new daemon rotates them, the logs are the previous
-            // run's; snapshot them before it can.
-            logs = lifecycleLogs(paths: paths, fromStart: true, ignoringPrevious: true)
-            try agent.install(autostart: config.autostart)
-        }
+        guard let logs = try loadJob(agent: agent, paths: paths, config: config, style: style) else { return }
 
         let startedAt = ContinuousClock.now
         let deadline = startedAt + .seconds(timeout)
@@ -150,6 +119,42 @@ struct Start: ParsableCommand {
         // The `dockma` context belongs to the default state directory.
         if paths.isDefaultRoot, let note = DockerContext.ensure(paths: paths) { print("  " + note) }
         if let hint = DockerContext.hint(paths: paths) { print("  " + hint) }
+    }
+
+    /// Replaces a stopping or dead job with a freshly loaded one. Returns the
+    /// logs that narrate the boot, or nil when dockma is already running.
+    private func loadJob(agent: LaunchAgent, paths: Paths, config: Config, style: TerminalStyle) throws -> [LogTail]? {
+        try migrateLegacyJob(of: agent)
+        var job = agent.state()
+        if job.isLoaded, job.pid != nil {
+            if DockerPing.isResponding(socketPath: paths.dockerSocket.path) {
+                print(style.success("dockma is already running"))
+                return nil
+            }
+            if (try? ControlClient.status(paths: paths))?.state == .stopping {
+                print("Waiting for the previous VM to stop…")
+                try agent.bootout()
+                job = agent.state()
+            }
+        }
+        if job.isLoaded && job.pid == nil {
+            // Left over from a failed start or a crash; reload the plist.
+            try agent.bootout()
+            job = agent.state()
+        }
+        if job.isLoaded {
+            // A daemon that is already booting has rotated its logs.
+            return lifecycleLogs(paths: paths, fromStart: true)
+        }
+        if ControlClient.isDaemonAnswering(paths: paths) {
+            print(style.success("dockma is already running") + " (started outside launchd with `dockma daemon`)")
+            return nil
+        }
+        // Until the new daemon rotates them, the logs are the previous run's;
+        // snapshot them before it can.
+        let logs = lifecycleLogs(paths: paths, fromStart: true, ignoringPrevious: true)
+        try agent.install(autostart: config.autostart)
+        return logs
     }
 
     /// Why `start` gave up waiting.
@@ -369,7 +374,14 @@ struct Logs: ParsableCommand {
     /// Prints the chosen log's tail, then follows it with `--follow`.
     func run() throws {
         let paths = Paths.default()
-        let url = docker ? paths.dockerLog : daemon ? paths.daemonLog : paths.consoleLog
+        let url: URL
+        if docker {
+            url = paths.dockerLog
+        } else if daemon {
+            url = paths.daemonLog
+        } else {
+            url = paths.consoleLog
+        }
         guard let text = tail(url, lines: lines) else {
             throw DockmaError("no log at \(url.path) yet")
         }
@@ -388,7 +400,9 @@ struct LogFollower {
         var tail = LogTail(url: url, fromStart: false)
         while true {
             Thread.sleep(forTimeInterval: 0.3)
-            while case let data = tail.readAppended(), !data.isEmpty {
+            while true {
+                let data = tail.readAppended()
+                if data.isEmpty { break }
                 FileHandle.standardOutput.write(data)
             }
         }
