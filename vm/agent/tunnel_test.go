@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"net"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -95,4 +97,48 @@ func TestPipeEndsBothDirectionsOnError(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("pipe kept waiting on an idle upstream after a failed copy")
 	}
+}
+
+// An upstream that answers and closes (a container exiting under
+// `docker run -i`) fails the client's next write with EPIPE. The part of its
+// answer still queued in the agent must reach the client anyway.
+func TestPipeDrainsTheAnswerOfAClosedUpstream(t *testing.T) {
+	client, a := tcpPair(t)
+	// Small TCP buffers keep most of the answer queued on the upstream side.
+	client.(*net.TCPConn).SetReadBuffer(4096)
+	a.(*net.TCPConn).SetWriteBuffer(4096)
+	path := filepath.Join(t.TempDir(), "up.sock")
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	b, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream, err := l.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := pipeAsync(a, b, a)
+
+	client.Write([]byte("req"))
+	request := make([]byte, 3)
+	if _, err := io.ReadFull(upstream, request); err != nil {
+		t.Fatal(err)
+	}
+	answer := bytes.Repeat([]byte("x"), 192<<10)
+	upstream.Write(answer)
+	upstream.Close() // nothing unread, so a clean close, not a reset
+	time.Sleep(50 * time.Millisecond)
+	client.Write([]byte("more")) // fails on the agent's side with EPIPE
+	time.Sleep(50 * time.Millisecond)
+
+	got, _ := io.ReadAll(client)
+	if len(got) != len(answer) {
+		t.Fatalf("client got %d of %d bytes", len(got), len(answer))
+	}
+	client.Close()
+	<-done
 }
