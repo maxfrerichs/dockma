@@ -72,8 +72,7 @@ public final class LogPanelRenderer: @unchecked Sendable {
             tick += 1
             condition.lock()
             if !isFinished {
-                let (seconds, attoseconds) = frameInterval.components
-                _ = condition.wait(until: Date(timeIntervalSinceNow: Double(seconds) + Double(attoseconds) / 1e18))
+                _ = condition.wait(until: Date(timeIntervalSinceNow: frameInterval / .seconds(1)))
             }
         }
         condition.unlock()

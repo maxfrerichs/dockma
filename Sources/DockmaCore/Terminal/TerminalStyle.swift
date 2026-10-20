@@ -59,6 +59,12 @@ public struct TerminalStyle: Sendable {
 
 /// Facts about the controlling terminal.
 public enum Terminal {
+    /// Writes `message` and a newline to standard error. The throwing write:
+    /// the other one raises an Objective-C exception when stderr is gone.
+    public static func printError(_ message: String) {
+        try? FileHandle.standardError.write(contentsOf: Data((message + "\n").utf8))
+    }
+
     /// Whether `fd` is a terminal.
     public static func isTerminal(_ fd: Int32) -> Bool { isatty(fd) == 1 }
 

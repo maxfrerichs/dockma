@@ -68,16 +68,7 @@ public final class SocketListener: @unchecked Sendable {
 
     /// Listens on a unix socket, replacing a stale socket file. Mode 0600.
     public static func unix(path: String, handler: @escaping @Sendable (Int32) -> Void) throws -> SocketListener {
-        var addr = sockaddr_un()
-        addr.sun_family = sa_family_t(AF_UNIX)
-        let bytes = Array(path.utf8)
-        guard bytes.count < MemoryLayout.size(ofValue: addr.sun_path) else {
-            throw DockmaError("socket path too long: \(path)")
-        }
-        withUnsafeMutableBytes(of: &addr.sun_path) { raw in
-            raw.copyBytes(from: bytes)
-            raw[bytes.count] = 0
-        }
+        var addr = try UnixSocket.makeAddress(path: path)
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw DockmaError.posix("socket") }
         unlink(path)

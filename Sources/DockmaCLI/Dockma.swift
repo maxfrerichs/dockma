@@ -17,9 +17,12 @@ func currentExecutable() -> String {
     return url.resolvingSymlinksInPath().path
 }
 
-/// Writes `message` and a newline to stderr.
-func printError(_ message: String) {
-    FileHandle.standardError.write(Data((message + "\n").utf8))
+/// Moves this `DOCKMA_HOME` off a job an older dockma started under the
+/// default label, saying so when it stopped one.
+func migrateLegacyJob(of agent: LaunchAgent) throws {
+    if try agent.migrateLegacyJob() {
+        print("Stopped this DOCKMA_HOME's job that an older dockma started as \(LaunchAgent.defaultLabel).")
+    }
 }
 
 /// Last `count` lines of a file, or nil if it doesn't exist.
@@ -74,7 +77,7 @@ struct Start: ParsableCommand {
 
         let style = TerminalStyle.standardOutput()
         let agent = LaunchAgent(paths: paths, executable: currentExecutable())
-        if try agent.migrateLegacyJob() { print("Stopped this DOCKMA_HOME's job that an older dockma started as \(LaunchAgent.defaultLabel).") }
+        try migrateLegacyJob(of: agent)
         var job = agent.state()
         if job.isLoaded, job.pid != nil {
             if DockerPing.isResponding(socketPath: paths.dockerSocket.path) {
@@ -97,7 +100,7 @@ struct Start: ParsableCommand {
             // A daemon that is already booting has rotated its logs.
             logs = lifecycleLogs(paths: paths, fromStart: true)
         } else {
-            if (try? ControlClient.status(paths: paths)) != nil {
+            if ControlClient.isDaemonAnswering(paths: paths) {
                 print(style.success("dockma is already running") + " (started outside launchd with `dockma daemon`)")
                 return
             }
@@ -123,7 +126,7 @@ struct Start: ParsableCommand {
                     throw DockmaError("the daemon reported Docker ready, but \(paths.dockerSocket.path) doesn't answer")
                 }
             case .closed:
-                if (try? ControlClient.status(paths: paths)) != nil {
+                if ControlClient.isDaemonAnswering(paths: paths) {
                     throw DockmaError("the running dockma daemon predates this CLI; run `dockma restart`")
                 }
                 throw StartFailure.daemonExited
@@ -132,13 +135,13 @@ struct Start: ParsableCommand {
             }
         } catch StartFailure.daemonExited {
             progress?.finish()
-            printError(errorStyle.failure("The dockma daemon exited during startup. Its log:"))
-            if let log = tail(paths.daemonLog, lines: 15) { printError(log) }
+            Terminal.printError(errorStyle.failure("The dockma daemon exited during startup. Its log:"))
+            if let log = tail(paths.daemonLog, lines: 15) { Terminal.printError(log) }
             throw ExitCode.failure
         } catch StartFailure.timedOut {
             progress?.finish()
-            printError(errorStyle.failure("Docker did not answer within \(timeout)s. Last console output:"))
-            if let log = tail(paths.consoleLog, lines: 20) { printError(log) }
+            Terminal.printError(errorStyle.failure("Docker did not answer within \(timeout)s. Last console output:"))
+            if let log = tail(paths.consoleLog, lines: 20) { Terminal.printError(log) }
             throw ExitCode.failure
         }
         progress?.finish()
@@ -215,7 +218,7 @@ struct Install: ParsableCommand {
                 """)
         }
         print(style.success("Installed dockma-linux \(version)") + " in \(paths.guest.path)")
-        if (try? ControlClient.status(paths: paths)) != nil {
+        if ControlClient.isDaemonAnswering(paths: paths) {
             print("  The running VM keeps its current guest until `dockma restart`.")
         } else {
             print("  Start it with `dockma start`.")
@@ -436,7 +439,7 @@ struct ConfigCommand: ParsableCommand {
         if config.cpus != before.cpus || config.memoryMiB != before.memoryMiB {
             for warning in config.resourceWarnings(hostCPUs: ProcessInfo.processInfo.activeProcessorCount,
                                                    hostMemoryBytes: ProcessInfo.processInfo.physicalMemory) {
-                printError(errorStyle.yellow("warning: ") + warning)
+                Terminal.printError(errorStyle.yellow("warning: ") + warning)
             }
         }
 
@@ -446,15 +449,11 @@ struct ConfigCommand: ParsableCommand {
                 // Move the plist between ~/.dockma and ~/Library/LaunchAgents
                 // without touching a running job.
                 let agent = LaunchAgent(paths: paths, executable: currentExecutable())
-                let from = agent.plistURL(autostart: before.autostart)
-                let to = agent.plistURL(autostart: config.autostart)
-                if FileManager.default.fileExists(atPath: from.path) {
-                    try FileManager.default.createDirectory(at: to.deletingLastPathComponent(), withIntermediateDirectories: true)
-                    try agent.plist(autostart: config.autostart).write(to: to, options: .atomic)
-                    try? FileManager.default.removeItem(at: from)
+                if FileManager.default.fileExists(atPath: agent.plistURL(autostart: before.autostart).path) {
+                    try agent.writePlist(autostart: config.autostart)
                 }
             }
-            let isRunning = (try? ControlClient.status(paths: paths)) != nil
+            let isRunning = ControlClient.isDaemonAnswering(paths: paths)
             print(style.success("Saved.") + (isRunning ? " Run `dockma restart` to apply." : " Applies on the next `dockma start`."))
         }
         /// `value`, in bold when the setting just changed.
@@ -482,8 +481,8 @@ struct Delete: ParsableCommand {
     func run() throws {
         let paths = Paths.default()
         let agent = LaunchAgent(paths: paths, executable: currentExecutable())
-        if try agent.migrateLegacyJob() { print("Stopped this DOCKMA_HOME's job that an older dockma started as \(LaunchAgent.defaultLabel).") }
-        if agent.state().isLoaded || (try? ControlClient.status(paths: paths)) != nil {
+        try migrateLegacyJob(of: agent)
+        if agent.state().isLoaded || ControlClient.isDaemonAnswering(paths: paths) {
             throw DockmaError("dockma is running; run `dockma stop` first")
         }
         if !force {

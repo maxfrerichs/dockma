@@ -38,6 +38,12 @@ public struct DaemonStatus: Codable, Equatable, Sendable {
 
 /// Talks to a running daemon. Every call fails fast when none is listening.
 public enum ControlClient {
+    /// Whether a daemon answers a status request. A socket round trip with
+    /// a 5 s timeout.
+    public static func isDaemonAnswering(paths: Paths) -> Bool {
+        (try? status(paths: paths)) != nil
+    }
+
     public static func status(paths: Paths) throws -> DaemonStatus {
         let data = try roundTrip(paths: paths, request: ControlRequest(command: .status))
         let decoder = JSONDecoder()
@@ -68,11 +74,10 @@ public enum ControlClient {
             // The daemon went away between connect and write.
             return .closed
         }
-        let milliseconds = timeout.components.seconds * 1000 + timeout.components.attoseconds / 1_000_000_000_000_000
         var pending = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
         var ready: Int32
         repeat {
-            ready = poll(&pending, 1, Int32(clamping: max(0, milliseconds)))
+            ready = poll(&pending, 1, Int32(clamping: max(0, Int(timeout / .milliseconds(1)))))
         } while ready < 0 && errno == EINTR
         guard ready > 0 else { return .timedOut }
         // Readable means a reply or EOF, and the reply is a single short line.
@@ -147,9 +152,8 @@ public enum ControlServer {
 }
 
 public enum UnixSocket {
-    /// Connects to a unix socket, with send/receive timeouts unless
-    /// `timeoutSeconds` is nil (interactive sessions).
-    public static func connect(path: String, timeoutSeconds: Int?) throws -> Int32 {
+    /// The socket address of `path`; throws if it doesn't fit `sun_path`.
+    static func makeAddress(path: String) throws -> sockaddr_un {
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         let bytes = Array(path.utf8)
@@ -160,6 +164,13 @@ public enum UnixSocket {
             raw.copyBytes(from: bytes)
             raw[bytes.count] = 0
         }
+        return addr
+    }
+
+    /// Connects to a unix socket, with send/receive timeouts unless
+    /// `timeoutSeconds` is nil (interactive sessions).
+    public static func connect(path: String, timeoutSeconds: Int?) throws -> Int32 {
+        var addr = try makeAddress(path: path)
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw DockmaError.posix("socket") }
         var on: Int32 = 1

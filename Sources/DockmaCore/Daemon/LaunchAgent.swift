@@ -84,7 +84,7 @@ public struct LaunchAgent: Sendable {
         guard let output = launchctlPrint() else { return JobState(isLoaded: false, pid: nil) }
         return JobState(
             isLoaded: true,
-            pid: Self.field("pid", launchctlPrint: output).flatMap { Int32($0) },
+            pid: Self.parsePID(launchctlPrint: output),
             runCount: Self.field("runs", launchctlPrint: output).flatMap { Int($0) } ?? 0)
     }
 
@@ -116,14 +116,22 @@ public struct LaunchAgent: Sendable {
     /// Writes the plist for the current autostart setting, removes the other
     /// one, and loads the job.
     public func install(autostart: Bool) throws {
-        let url = plistURL(autostart: autostart)
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try plist(autostart: autostart).write(to: url, options: .atomic)
-        try? FileManager.default.removeItem(at: plistURL(autostart: !autostart))
+        let url = try writePlist(autostart: autostart)
         let result = try Subprocess.run("/bin/launchctl", arguments: ["bootstrap", domain, url.path])
         guard result.status == 0 else {
             throw DockmaError("launchctl bootstrap failed: \(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
+    }
+
+    /// Writes the plist for the autostart setting, removes the other one,
+    /// and returns where it was written. Doesn't touch a loaded job.
+    @discardableResult
+    public func writePlist(autostart: Bool) throws -> URL {
+        let url = plistURL(autostart: autostart)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try plist(autostart: autostart).write(to: url, options: .atomic)
+        try? FileManager.default.removeItem(at: plistURL(autostart: !autostart))
+        return url
     }
 
     /// Unloads the job and waits until launchd has removed it. launchd sends

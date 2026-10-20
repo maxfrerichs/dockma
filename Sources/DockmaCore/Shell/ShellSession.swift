@@ -29,7 +29,7 @@ public final class ShellSession: @unchecked Sendable {
         do {
             fd = try UnixSocket.connect(path: paths.shellSocket.path, timeoutSeconds: nil)
         } catch {
-            if (try? ControlClient.status(paths: paths)) != nil {
+            if ControlClient.isDaemonAnswering(paths: paths) {
                 throw DockmaError("the running dockma daemon predates `dockma shell`; run `dockma restart`")
             }
             throw DockmaError("dockma is not running (start it with `dockma start`)")
@@ -135,7 +135,7 @@ public final class ShellSession: @unchecked Sendable {
                         return code
                     case .error(let message):
                         restoreTerminal()
-                        Self.printError("dockma shell: \(message)")
+                        Terminal.printError("dockma shell: \(message)")
                         return 255
                     default:
                         break
@@ -143,7 +143,7 @@ public final class ShellSession: @unchecked Sendable {
                 }
             } catch {
                 restoreTerminal()
-                Self.printError("dockma shell: \(error)")
+                Terminal.printError("dockma shell: \(error)")
                 return 255
             }
             let n = buffer.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
@@ -151,11 +151,11 @@ public final class ShellSession: @unchecked Sendable {
             if n <= 0 {
                 restoreTerminal()
                 if started {
-                    Self.printError("dockma shell: connection to the VM closed (VM stopped or restarted?)")
+                    Terminal.printError("dockma shell: connection to the VM closed (VM stopped or restarted?)")
                 } else {
                     // No `started` frame: the agent doesn't serve the shell port,
                     // i.e. the guest image predates `dockma shell`.
-                    Self.printError("dockma shell: the VM closed the session at once (guest image older than the CLI? run `make guest install-guest` and `dockma restart`)")
+                    Terminal.printError("dockma shell: the VM closed the session at once (guest image older than the CLI? run `make guest install-guest` and `dockma restart`)")
                 }
                 return 255
             }
@@ -192,9 +192,5 @@ public final class ShellSession: @unchecked Sendable {
         guard var original = savedTerminal else { return }
         tcsetattr(STDIN_FILENO, TCSANOW, &original)
         savedTerminal = nil
-    }
-
-    private static func printError(_ message: String) {
-        FileHandle.standardError.write(Data((message + "\n").utf8))
     }
 }

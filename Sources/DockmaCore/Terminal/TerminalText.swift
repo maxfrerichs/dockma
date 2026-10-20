@@ -55,8 +55,7 @@ public enum TerminalText {
 
     /// `duration` in seconds with one decimal, e.g. `1.2s`.
     public static func seconds(_ duration: Duration) -> String {
-        let (seconds, attoseconds) = duration.components
-        return String(format: "%.1fs", Double(seconds) + Double(attoseconds) / 1e18)
+        String(format: "%.1fs", duration / .seconds(1))
     }
 }
 

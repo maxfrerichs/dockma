@@ -118,7 +118,7 @@ public final class DatagramRelay: @unchecked Sendable {
             // reused descriptor.
             lock.withLock { _ = Darwin.close(fd) }
         }
-        let interval = DispatchTimeInterval.nanoseconds(Self.nanoseconds(min(limits.idleTimeout / 4, .seconds(5))))
+        let interval = DispatchTimeInterval.nanoseconds(Int(min(limits.idleTimeout / 4, .seconds(5)) / .nanoseconds(1)))
         sweeper.schedule(deadline: .now() + interval, repeating: interval)
         sweeper.setEventHandler { [weak self] in self?.expireIdleFlows() }
         source.resume()
@@ -325,12 +325,6 @@ public final class DatagramRelay: @unchecked Sendable {
         discardPending(of: flow)
         if flows[flow.key] === flow { flows.removeValue(forKey: flow.key) }
         if flow.guest >= 0 { shutdown(flow.guest, SHUT_RDWR) }
-    }
-
-    /// The whole nanoseconds in `duration`.
-    private static func nanoseconds(_ duration: Duration) -> Int {
-        let (seconds, attoseconds) = duration.components
-        return Int(seconds) * 1_000_000_000 + Int(attoseconds / 1_000_000_000)
     }
 }
 

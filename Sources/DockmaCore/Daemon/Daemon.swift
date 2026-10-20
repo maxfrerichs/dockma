@@ -368,16 +368,7 @@ public final class Daemon {
     /// second daemon (say `dockma daemon` by hand next to the launchd job)
     /// can't boot another VM on the same data disk. Returns the descriptor.
     nonisolated static func acquireLock(at url: URL) throws -> Int32 {
-        let fd = open(url.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
-        guard fd >= 0 else { throw DockmaError.posix("open \(url.path)") }
-        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
-            let error = errno == EWOULDBLOCK
-                ? DockmaError("another dockma daemon is running (\(url.path) is locked)")
-                : DockmaError.posix("lock \(url.path)")
-            close(fd)
-            throw error
-        }
-        return fd
+        try FileLock.acquire(at: url, busyMessage: "another dockma daemon is running")
     }
 
     /// launchd appends the daemon's stdout and stderr to daemon.log forever.
