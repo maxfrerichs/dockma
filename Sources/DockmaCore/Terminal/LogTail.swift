@@ -32,6 +32,17 @@ public struct LogTail: Sendable {
         }
     }
 
+    /// The last `count` lines of the file at `url`, joined with `\n`; nil if
+    /// it doesn't exist. Reads the whole file.
+    public static func lastLines(of url: URL, count: Int) -> String? {
+        guard let data = FileManager.default.contents(atPath: url.path) else { return nil }
+        // The guest console is a TTY and writes "\r\n", a single Character in
+        // Swift, so split on any newline rather than "\n".
+        let lines = String(decoding: data, as: UTF8.self).split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+        let trimmed = lines.last == "" ? lines.dropLast() : lines[...]
+        return trimmed.suffix(count).joined(separator: "\n")
+    }
+
     /// The inode of the file at `url`, or nil if it doesn't exist.
     public static func inode(of url: URL) -> UInt64? {
         var info = stat()

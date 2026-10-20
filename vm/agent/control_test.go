@@ -2,8 +2,12 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"log"
 	"net"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -93,5 +97,20 @@ func TestOnlyTheHostIsAPeer(t *testing.T) {
 	}
 	if isHostPeer(&net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1}) {
 		t.Error("non-vsock address admitted")
+	}
+}
+
+func TestChangeLoggerSkipsRepeats(t *testing.T) {
+	var out bytes.Buffer
+	log.SetOutput(&out)
+	defer log.SetOutput(os.Stderr)
+	var errs changeLogger
+	errs.printf("fail %d", 1)
+	errs.printf("fail %d", 1)
+	errs.printf("fail %d", 2)
+	errs.reset()
+	errs.printf("fail %d", 2)
+	if got := strings.Count(out.String(), "fail"); got != 3 {
+		t.Fatalf("logged %d lines, want 3:\n%s", got, out.String())
 	}
 }

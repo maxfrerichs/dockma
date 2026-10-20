@@ -29,7 +29,7 @@ import (
 )
 
 const (
-	version = "0.6.0"
+	version = "0.6.1"
 
 	dockerPort  = 1024
 	controlPort = 1025
@@ -65,20 +65,35 @@ func main() {
 // dialControl keeps a control connection to the host open. The host listens
 // before the VM boots, so the retry only covers a host that went away.
 func dialControl(ports *portWatcher) {
-	var lastErr string
+	var errs changeLogger
 	for {
 		c, err := vsock.Dial(vsock.Host, controlPort, nil)
 		if err != nil {
-			if err.Error() != lastErr {
-				log.Printf("dial host vsock:%d: %v", controlPort, err)
-				lastErr = err.Error()
-			}
+			errs.printf("dial host vsock:%d: %v", controlPort, err)
 		} else {
-			lastErr = ""
+			errs.reset()
 			handleControl(c, ports)
 		}
 		time.Sleep(time.Second)
 	}
+}
+
+// changeLogger logs a message only when it differs from the last one, so a
+// failure that repeats every second is logged once.
+type changeLogger struct {
+	last string
+}
+
+func (l *changeLogger) printf(format string, args ...any) {
+	if msg := fmt.Sprintf(format, args...); msg != l.last {
+		log.Print(msg)
+		l.last = msg
+	}
+}
+
+// reset makes the next message log even if it repeats the last one.
+func (l *changeLogger) reset() {
+	l.last = ""
 }
 
 // raiseFileLimit lifts the descriptor limit from init's 1024/4096, since
@@ -96,16 +111,13 @@ func raiseFileLimit() {
 // ext4 only reports with a discard.
 func trimDataDisk() {
 	time.Sleep(time.Minute)
-	var lastErr string
+	var errs changeLogger
 	for {
 		if err := exec.Command("mountpoint", "-q", dataRoot).Run(); err == nil {
 			if out, err := exec.Command("fstrim", dataRoot).CombinedOutput(); err != nil {
-				if msg := strings.TrimSpace(string(out)); msg != lastErr {
-					log.Printf("fstrim %s: %v: %s", dataRoot, err, msg)
-					lastErr = msg
-				}
+				errs.printf("fstrim %s: %v: %s", dataRoot, err, strings.TrimSpace(string(out)))
 			} else {
-				lastErr = ""
+				errs.reset()
 			}
 		}
 		time.Sleep(time.Hour)
@@ -434,14 +446,13 @@ func equalPorts(a, b []ForwardedPort) bool {
 }
 
 func (w *portWatcher) run(ctx context.Context) {
-	var lastErr string
+	var errs changeLogger
 	for {
 		// Armed before the attempt, so a socket created during it still
 		// wakes the wait below.
 		waiter, waiterErr := newFileWaiter(filepath.Dir(dockerSocket), filepath.Base(dockerSocket))
-		if waiterErr != nil && waiterErr.Error() != lastErr {
-			log.Printf("port watcher: %v", waiterErr)
-			lastErr = waiterErr.Error()
+		if waiterErr != nil {
+			errs.printf("port watcher: %v", waiterErr)
 		}
 		err := w.watch(ctx, func() {
 			// Only a failed attempt waits on it; an open stream can last
@@ -455,9 +466,8 @@ func (w *portWatcher) run(ctx context.Context) {
 		// dockerd not listening yet (boot, restart) is expected; other errors
 		// are logged once each instead of every second.
 		waiting := errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED)
-		if err != nil && !waiting && !errors.Is(err, context.Canceled) && err.Error() != lastErr {
-			log.Printf("port watcher: %v", err)
-			lastErr = err.Error()
+		if err != nil && !waiting && !errors.Is(err, context.Canceled) {
+			errs.printf("port watcher: %v", err)
 		}
 		if waiting && waiter != nil {
 			// dockerd creates its socket when it starts listening. The

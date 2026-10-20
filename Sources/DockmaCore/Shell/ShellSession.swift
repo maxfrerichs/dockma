@@ -6,6 +6,8 @@ import Foundation
 public final class ShellSession: @unchecked Sendable {
     private let fd: Int32
     private let usesTTY: Bool
+    /// Where stdin frames are read from; standard input outside tests.
+    private let input: Int32
     private let writeLock = NSLock()
     private var signalSources: [DispatchSourceSignal] = []
     private var savedTerminal: termios?
@@ -18,9 +20,11 @@ public final class ShellSession: @unchecked Sendable {
     private var flow = StdinFlow.unknown
     private var credit = 0
 
-    private init(fd: Int32, tty: Bool) {
+    /// Creates a session on the connected shell socket `fd`.
+    init(fd: Int32, tty: Bool, input: Int32 = STDIN_FILENO) {
         self.fd = fd
         self.usesTTY = tty
+        self.input = input
     }
 
     /// Runs `argv` (a login shell when empty) and returns its exit code.
@@ -68,6 +72,12 @@ public final class ShellSession: @unchecked Sendable {
             }
         }
 
+        return relay()
+    }
+
+    /// Pumps input to the agent and its output back until the command
+    /// exits; returns its exit code.
+    func relay() -> Int32 {
         Thread.detachNewThread { [self] in pumpStdin() }
         return receive()
     }
@@ -77,7 +87,7 @@ public final class ShellSession: @unchecked Sendable {
     private func pumpStdin() {
         var buffer = [UInt8](repeating: 0, count: 32 * 1024)
         while true {
-            let n = buffer.withUnsafeMutableBytes { read(STDIN_FILENO, $0.baseAddress, $0.count) }
+            let n = buffer.withUnsafeMutableBytes { read(input, $0.baseAddress, $0.count) }
             if n < 0 && errno == EINTR { continue }
             if n <= 0 { break }
             var offset = 0

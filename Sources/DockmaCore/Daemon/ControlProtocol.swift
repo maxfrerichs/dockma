@@ -133,10 +133,10 @@ public enum ControlServer {
         try SocketListener.unix(path: path) { client in
             // Read off the accept loop, so a client that sends nothing can't
             // hold up the others for the 5 s timeout.
-            DispatchQueue.global().async {
-                var timeout = timeval(tv_sec: 5, tv_usec: 0)
-                setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-                setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+            // A thread, not global(): the read blocks, and global() workers
+            // also run the accept and UDP read sources.
+            Thread.detachNewThread {
+                SocketOptions.setTimeout(seconds: 5, on: client)
                 guard let line = LineReader(fd: client).readLine(),
                       let request = try? JSONDecoder().decode(ControlRequest.self, from: line)
                 else {
@@ -173,13 +173,8 @@ public enum UnixSocket {
         var addr = try makeAddress(path: path)
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw DockmaError.posix("socket") }
-        var on: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
-        if let timeoutSeconds {
-            var timeout = timeval(tv_sec: timeoutSeconds, tv_usec: 0)
-            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-            setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        }
+        SocketOptions.disableSIGPIPE(on: fd)
+        if let timeoutSeconds { SocketOptions.setTimeout(seconds: timeoutSeconds, on: fd) }
         let rc = withUnsafePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                 Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size))

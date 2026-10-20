@@ -25,16 +25,6 @@ func migrateLegacyJob(of agent: LaunchAgent) throws {
     }
 }
 
-/// Last `count` lines of a file, or nil if it doesn't exist.
-func tail(_ url: URL, lines count: Int) -> String? {
-    guard let data = FileManager.default.contents(atPath: url.path) else { return nil }
-    // The guest consoles are TTYs and write "\r\n", a single Character in
-    // Swift, so split on any newline rather than "\n".
-    let lines = String(decoding: data, as: UTF8.self).split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
-    let trimmed = lines.last == "" ? lines.dropLast() : lines[...]
-    return trimmed.suffix(count).joined(separator: "\n")
-}
-
 /// Shows `title` while slow work runs: on a terminal that can move the
 /// cursor as a live panel over the lines appended to `logs`, otherwise as a
 /// plain line. Returns the panel, which the caller must finish before
@@ -105,12 +95,12 @@ struct Start: ParsableCommand {
         } catch StartFailure.daemonExited {
             progress?.finish()
             Terminal.printError(errorStyle.failure("The dockma daemon exited during startup. Its log:"))
-            if let log = tail(paths.daemonLog, lines: 15) { Terminal.printError(log) }
+            if let log = LogTail.lastLines(of: paths.daemonLog, count: 15) { Terminal.printError(log) }
             throw ExitCode.failure
         } catch StartFailure.timedOut {
             progress?.finish()
             Terminal.printError(errorStyle.failure("Docker did not answer within \(timeout)s. Last console output:"))
-            if let log = tail(paths.consoleLog, lines: 20) { Terminal.printError(log) }
+            if let log = LogTail.lastLines(of: paths.consoleLog, count: 20) { Terminal.printError(log) }
             throw ExitCode.failure
         }
         progress?.finish()
@@ -382,7 +372,7 @@ struct Logs: ParsableCommand {
         } else {
             url = paths.consoleLog
         }
-        guard let text = tail(url, lines: lines) else {
+        guard let text = LogTail.lastLines(of: url, count: lines) else {
             throw DockmaError("no log at \(url.path) yet")
         }
         if !text.isEmpty { print(text) }

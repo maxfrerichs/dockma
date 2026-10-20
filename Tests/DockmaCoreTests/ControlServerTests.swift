@@ -66,3 +66,26 @@ private let status = DaemonStatus(
         return
     }
 }
+
+/// Serves one HTTP `response` per connection on a unix socket at `path`.
+private func fakeDocker(path: String, response: String) throws -> SocketListener {
+    try SocketListener.unix(path: path) { client in
+        var request = [UInt8](repeating: 0, count: 4096)
+        _ = read(client, &request, request.count)
+        writeAll(Data(response.utf8), to: client)
+        close(client)
+    }
+}
+
+@Test func dockerPingWantsA200WithOK() async throws {
+    let healthy = makeSocketPath()
+    let healthyListener = try fakeDocker(path: healthy, response: "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
+    defer { healthyListener.cancel() }
+    let failing = makeSocketPath()
+    let failingListener = try fakeDocker(path: failing, response: "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n")
+    defer { failingListener.cancel() }
+
+    #expect(await runOnThread { DockerPing.isResponding(socketPath: healthy) })
+    #expect(await runOnThread { !DockerPing.isResponding(socketPath: failing) })
+    #expect(await runOnThread { !DockerPing.isResponding(socketPath: makeSocketPath()) })
+}

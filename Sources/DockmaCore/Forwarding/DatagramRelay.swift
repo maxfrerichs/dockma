@@ -255,8 +255,7 @@ public final class DatagramRelay: @unchecked Sendable {
     private func didConnect(_ flow: Flow, guest: Int32) {
         // A write blocked this long fails and ends the flow, so stalled flows
         // can't pile up blocked threads in dispatch's limited pool.
-        var timeout = timeval(tv_sec: 5, tv_usec: 0)
-        setsockopt(guest, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        SocketOptions.setTimeout(seconds: 5, on: guest, for: [SO_SNDTIMEO])
         let isLive = lock.withLock {
             guard !flow.isClosed else { return false }
             flow.guest = guest

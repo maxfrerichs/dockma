@@ -98,8 +98,8 @@ func runDaemonConfig(args []string) int {
 		user = map[string]any{}
 	}
 	gateway := ""
-	if data, err := os.ReadFile(gatewayPath); err == nil {
-		gateway = strings.TrimSpace(string(data))
+	if ip := readIP(gatewayPath); ip != nil {
+		gateway = ip.String()
 	}
 	merged, warnings := mergeDaemonConfig(baked, user, gateway)
 	for _, w := range warnings {

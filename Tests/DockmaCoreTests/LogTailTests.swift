@@ -113,3 +113,13 @@ private final class OutputCollector: @unchecked Sendable {
     /// Records `chunk`.
     func append(_ chunk: String) { lock.withLock { chunks.append(chunk) } }
 }
+
+@Test func lastLinesSplitsTheConsolesCRLF() throws {
+    let dir = try temporaryDirectory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appendingPathComponent("console.log")
+    try Data("a\r\nb\r\nc\r\n".utf8).write(to: url)
+    #expect(LogTail.lastLines(of: url, count: 2) == "b\nc")
+    #expect(LogTail.lastLines(of: url, count: 10) == "a\nb\nc")
+    #expect(LogTail.lastLines(of: dir.appendingPathComponent("missing.log"), count: 2) == nil)
+}

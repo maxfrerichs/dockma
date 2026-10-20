@@ -46,8 +46,7 @@ public final class SocketListener: @unchecked Sendable {
                 }
                 // macOS accepted sockets inherit O_NONBLOCK; the copiers block.
                 _ = fcntl(client, F_SETFL, fcntl(client, F_GETFL) & ~O_NONBLOCK)
-                var on: Int32 = 1
-                setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+                SocketOptions.disableSIGPIPE(on: client)
                 handler(client)
             }
         }
