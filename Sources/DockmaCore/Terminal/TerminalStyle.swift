@@ -57,7 +57,7 @@ public struct TerminalStyle: Sendable {
     }
 }
 
-/// Facts about the controlling terminal.
+/// Facts about the controlling terminal, and writing errors to standard error.
 public enum Terminal {
     /// Writes `message` and a newline to standard error. The throwing write:
     /// the other one raises an Objective-C exception when stderr is gone.

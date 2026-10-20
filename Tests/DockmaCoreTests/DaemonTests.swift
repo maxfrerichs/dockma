@@ -53,9 +53,6 @@ import Testing
     let requested = ContinuousClock.now
     #expect(Daemon.forceStopDeadline(requestedAt: requested, isShutdownSent: true) == requested + Daemon.shutdownGrace)
     #expect(Daemon.forceStopDeadline(requestedAt: requested, isShutdownSent: false) == requested + .seconds(2))
-    // An agent that connects 10 s into a stop gets the rest of the grace, not a fresh one.
-    let late = Daemon.forceStopDeadline(requestedAt: requested, isShutdownSent: true)
-    #expect(late < requested + .seconds(10) + Daemon.shutdownGrace)
 }
 
 @Test func shutdownGraceEndsBeforeLaunchdKillsTheDaemon() throws {

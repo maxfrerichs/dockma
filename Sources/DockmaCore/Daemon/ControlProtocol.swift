@@ -134,7 +134,9 @@ public enum ControlServer {
             // Read off the accept loop, so a client that sends nothing can't
             // hold up the others for the 5 s timeout.
             // A thread, not global(): the read blocks, and global() workers
-            // also run the accept and UDP read sources.
+            // also run the accept and UDP read sources. Threads aren't capped,
+            // but only the user's own processes can connect (mode 0600) and
+            // each thread ends within the 5 s timeout.
             Thread.detachNewThread {
                 SocketOptions.setTimeout(seconds: 5, on: client)
                 guard let line = LineReader(fd: client).readLine(),
