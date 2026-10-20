@@ -41,12 +41,12 @@ public struct LogPanel: Sendable {
         // Spinner, space, title, two spaces, elapsed time; one column free.
         let titleWidth = width - 1 - 4 - elapsedText.count
         let spin = String(Self.spinner[tick % Self.spinner.count])
-        output += "\(style.cyan(spin)) \(TerminalText.truncate(title, toWidth: titleWidth + 1))  \(style.dim(elapsedText))\n"
+        output += "\(style.cyan(spin)) \(TerminalText.truncated(title, toWidth: titleWidth + 1))  \(style.dim(elapsedText))\n"
         // The cursor can't move above the top of the screen, so the whole
         // panel must fit on it.
         let shown = lines.suffix(max(0, min(rows, height - 2)))
         for line in shown {
-            output += style.dim("  │ " + TerminalText.truncate(line, toWidth: width - 4)) + "\n"
+            output += style.dim("  │ " + TerminalText.truncated(line, toWidth: width - 4)) + "\n"
         }
         drawnLineCount = 1 + shown.count
         return output

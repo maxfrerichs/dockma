@@ -49,7 +49,9 @@ public enum GuestRelease {
     /// Throws if another install holds the lock.
     public static func install(version: String, from baseURL: URL, paths: Paths, showsProgress: Bool = false) throws {
         try paths.createDirectories()
-        let lockFD = try acquireInstallLock(at: paths.guestInstallLock)
+        // Close-on-exec, so a curl that outlives a killed install doesn't
+        // keep holding the lock.
+        let lockFD = try FileLock.acquire(at: paths.guestInstallLock, busyMessage: "another `dockma install` is running")
         defer { close(lockFD) }
         // A killed install skips its cleanup; with the lock held, every
         // staging directory left is such a leftover.
@@ -83,23 +85,7 @@ public enum GuestRelease {
         guard installed == GuestImage.protocolVersion else {
             throw DockmaError("dockma-linux \(version) speaks guest protocol \(installed), but this dockma needs \(GuestImage.protocolVersion)")
         }
-        try swap(guest, into: paths.guest, parkingIn: staging)
-    }
-
-    /// Opens and locks `url` without waiting, returning the descriptor. It
-    /// is close-on-exec, so a curl that outlives a killed install doesn't
-    /// keep holding the lock.
-    private static func acquireInstallLock(at url: URL) throws -> Int32 {
-        let fd = open(url.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
-        guard fd >= 0 else { throw DockmaError.posix("open \(url.path)") }
-        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
-            let error = errno == EWOULDBLOCK
-                ? DockmaError("another `dockma install` is running (\(url.path) is locked)")
-                : DockmaError.posix("lock \(url.path)")
-            close(fd)
-            throw error
-        }
-        return fd
+        try exchange(guest, into: paths.guest, parkingIn: staging)
     }
 
     /// Deletes the staging directories directly inside `root`.
@@ -158,7 +144,7 @@ public enum GuestRelease {
 
     /// Moves `new` to `target`, exchanging the two atomically if `target`
     /// exists. The previous contents end up in `parking`.
-    private static func swap(_ new: URL, into target: URL, parkingIn parking: URL) throws {
+    private static func exchange(_ new: URL, into target: URL, parkingIn parking: URL) throws {
         guard FileManager.default.fileExists(atPath: target.path) else {
             guard rename(new.path, target.path) == 0 else { throw DockmaError.posix("rename \(new.path)") }
             return

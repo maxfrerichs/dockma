@@ -72,8 +72,7 @@ public final class LogPanelRenderer: @unchecked Sendable {
             tick += 1
             condition.lock()
             if !isFinished {
-                let (seconds, attoseconds) = frameInterval.components
-                _ = condition.wait(until: Date(timeIntervalSinceNow: Double(seconds) + Double(attoseconds) / 1e18))
+                _ = condition.wait(until: Date(timeIntervalSinceNow: frameInterval / .seconds(1)))
             }
         }
         condition.unlock()
@@ -85,7 +84,7 @@ public final class LogPanelRenderer: @unchecked Sendable {
     private func drawFrame(tick: Int) {
         for index in tails.indices {
             for line in splitters[index].lines(appending: tails[index].readAppended()) {
-                let text = TerminalText.sanitize(TerminalText.withoutTimestamp(line))
+                let text = TerminalText.sanitized(TerminalText.withoutTimestamp(line))
                 if !text.trimmingCharacters(in: .whitespaces).isEmpty { panel.append(text) }
             }
         }

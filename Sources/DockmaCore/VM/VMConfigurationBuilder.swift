@@ -64,14 +64,14 @@ public enum VMConfigurationBuilder {
 
         let bootLoader = VZLinuxBootLoader(kernelURL: paths.kernel)
         bootLoader.initialRamdiskURL = paths.initrd
-        bootLoader.commandLine = KernelCmdline.build(home: paths.home.path, state: paths.root.path)
+        bootLoader.commandLine = KernelCmdline.commandLine(home: paths.home.path, state: paths.root.path)
 
         let vm = VZVirtualMachineConfiguration()
         vm.bootLoader = bootLoader
         vm.platform = VZGenericPlatformConfiguration()
         vm.cpuCount = min(max(config.cpus, VZVirtualMachineConfiguration.minimumAllowedCPUCount),
                           VZVirtualMachineConfiguration.maximumAllowedCPUCount)
-        vm.memorySize = min(max(config.memoryMiB * 1024 * 1024, VZVirtualMachineConfiguration.minimumAllowedMemorySize),
+        vm.memorySize = min(max(config.memoryMiB << 20, VZVirtualMachineConfiguration.minimumAllowedMemorySize),
                             VZVirtualMachineConfiguration.maximumAllowedMemorySize)
 
         // One console device with named ports, so the guest finds each by
@@ -151,7 +151,7 @@ public enum VMConfigurationBuilder {
     /// The guest grows the ext4 filesystem with resize2fs on boot.
     /// The image is kept at mode 0600.
     nonisolated public static func prepareDataDisk(at url: URL, sizeGiB: UInt64) throws {
-        let size = sizeGiB * 1024 * 1024 * 1024
+        let size = sizeGiB << 30
         let fm = FileManager.default
         if !fm.fileExists(atPath: url.path) {
             guard fm.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {

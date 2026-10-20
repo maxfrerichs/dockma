@@ -5,7 +5,9 @@ import Foundation
 /// command in the VM.
 public final class ShellSession: @unchecked Sendable {
     private let fd: Int32
-    private let tty: Bool
+    private let usesTTY: Bool
+    /// Where stdin frames are read from; standard input outside tests.
+    private let input: Int32
     private let writeLock = NSLock()
     private var signalSources: [DispatchSourceSignal] = []
     private var savedTerminal: termios?
@@ -18,9 +20,11 @@ public final class ShellSession: @unchecked Sendable {
     private var flow = StdinFlow.unknown
     private var credit = 0
 
-    private init(fd: Int32, tty: Bool) {
+    /// Creates a session on the connected shell socket `fd`.
+    init(fd: Int32, tty: Bool, input: Int32 = STDIN_FILENO) {
         self.fd = fd
-        self.tty = tty
+        self.usesTTY = tty
+        self.input = input
     }
 
     /// Runs `argv` (a login shell when empty) and returns its exit code.
@@ -29,7 +33,7 @@ public final class ShellSession: @unchecked Sendable {
         do {
             fd = try UnixSocket.connect(path: paths.shellSocket.path, timeoutSeconds: nil)
         } catch {
-            if (try? ControlClient.status(paths: paths)) != nil {
+            if ControlClient.isDaemonAnswering(paths: paths) {
                 throw DockmaError("the running dockma daemon predates `dockma shell`; run `dockma restart`")
             }
             throw DockmaError("dockma is not running (start it with `dockma start`)")
@@ -46,9 +50,9 @@ public final class ShellSession: @unchecked Sendable {
     private func run(argv: [String]) throws -> Int32 {
         let (rows, cols) = Terminal.size()
         let term = ProcessInfo.processInfo.environment["TERM"] ?? "xterm-256color"
-        send(.start(ShellStart(argv: argv, tty: tty, rows: rows, cols: cols, term: term)))
+        send(.start(ShellStart(argv: argv, tty: usesTTY, rows: rows, cols: cols, term: term)))
 
-        if tty {
+        if usesTTY {
             enterRawMode()
             handleSignal(SIGWINCH) { session in
                 let (rows, cols) = Terminal.size()
@@ -68,6 +72,12 @@ public final class ShellSession: @unchecked Sendable {
             }
         }
 
+        return relay()
+    }
+
+    /// Pumps input to the agent and its output back until the command
+    /// exits; returns its exit code.
+    func relay() -> Int32 {
         Thread.detachNewThread { [self] in pumpStdin() }
         return receive()
     }
@@ -77,7 +87,7 @@ public final class ShellSession: @unchecked Sendable {
     private func pumpStdin() {
         var buffer = [UInt8](repeating: 0, count: 32 * 1024)
         while true {
-            let n = buffer.withUnsafeMutableBytes { read(STDIN_FILENO, $0.baseAddress, $0.count) }
+            let n = buffer.withUnsafeMutableBytes { read(input, $0.baseAddress, $0.count) }
             if n < 0 && errno == EINTR { continue }
             if n <= 0 { break }
             var offset = 0
@@ -135,7 +145,7 @@ public final class ShellSession: @unchecked Sendable {
                         return code
                     case .error(let message):
                         restoreTerminal()
-                        Self.printError("dockma shell: \(message)")
+                        Terminal.printError("dockma shell: \(message)")
                         return 255
                     default:
                         break
@@ -143,7 +153,7 @@ public final class ShellSession: @unchecked Sendable {
                 }
             } catch {
                 restoreTerminal()
-                Self.printError("dockma shell: \(error)")
+                Terminal.printError("dockma shell: \(error)")
                 return 255
             }
             let n = buffer.withUnsafeMutableBytes { read(fd, $0.baseAddress, $0.count) }
@@ -151,11 +161,11 @@ public final class ShellSession: @unchecked Sendable {
             if n <= 0 {
                 restoreTerminal()
                 if started {
-                    Self.printError("dockma shell: connection to the VM closed (VM stopped or restarted?)")
+                    Terminal.printError("dockma shell: connection to the VM closed (VM stopped or restarted?)")
                 } else {
                     // No `started` frame: the agent doesn't serve the shell port,
                     // i.e. the guest image predates `dockma shell`.
-                    Self.printError("dockma shell: the VM closed the session at once (guest image older than the CLI? run `make guest install-guest` and `dockma restart`)")
+                    Terminal.printError("dockma shell: the VM closed the session at once (guest image older than the CLI? run `make guest install-guest` and `dockma restart`)")
                 }
                 return 255
             }
@@ -192,9 +202,5 @@ public final class ShellSession: @unchecked Sendable {
         guard var original = savedTerminal else { return }
         tcsetattr(STDIN_FILENO, TCSANOW, &original)
         savedTerminal = nil
-    }
-
-    private static func printError(_ message: String) {
-        FileHandle.standardError.write(Data((message + "\n").utf8))
     }
 }

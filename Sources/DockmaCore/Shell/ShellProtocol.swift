@@ -127,6 +127,8 @@ public enum ShellFrame: Equatable, Sendable {
 
 /// Incremental frame parser: feed it bytes as they arrive, then drain frames.
 public struct ShellFrameDecoder {
+    /// The type byte and the u32 length.
+    private static let headerSize = 5
     private var buffer = Data()
 
     public init() {}
@@ -137,16 +139,17 @@ public struct ShellFrameDecoder {
 
     /// The next complete frame, or nil until more bytes arrive.
     public mutating func next() throws -> ShellFrame? {
-        guard buffer.count >= 5 else { return nil }
+        guard buffer.count >= Self.headerSize else { return nil }
         let start = buffer.startIndex
-        let length = buffer[(start + 1)..<(start + 5)].reduce(0) { $0 << 8 | Int($1) }
+        let length = buffer[(start + 1)..<(start + Self.headerSize)].reduce(0) { $0 << 8 | Int($1) }
         guard length <= ShellFrame.maxPayloadSize else {
             throw DockmaError("shell frame of \(length) bytes exceeds the limit")
         }
-        guard buffer.count >= 5 + length else { return nil }
+        let end = start + Self.headerSize + length
+        guard buffer.endIndex >= end else { return nil }
         let type = buffer[start]
-        let payload = Data(buffer[(start + 5)..<(start + 5 + length)])
-        buffer.removeSubrange(start..<(start + 5 + length))
+        let payload = Data(buffer[(start + Self.headerSize)..<end])
+        buffer.removeSubrange(start..<end)
         return try ShellFrame.decode(type: type, payload: payload)
     }
 }

@@ -159,36 +159,30 @@ func eth0Networks() []*net.IPNet {
 // holding the port) is logged once, not every second.
 func serveDNS(f *dnsForwarder) {
 	go func() {
-		var lastErr string
+		var errs changeLogger
 		for {
 			pc, err := net.ListenPacket("udp4", dnsListenAddress)
 			if err != nil {
-				if err.Error() != lastErr {
-					log.Printf("dns: listen udp: %v", err)
-					lastErr = err.Error()
-				}
+				errs.printf("dns: listen udp: %v", err)
 				time.Sleep(time.Second)
 				continue
 			}
-			lastErr = ""
+			errs.reset()
 			f.serveUDP(pc)
 			pc.Close()
 			// A socket that fails right away mustn't spin.
 			time.Sleep(time.Second)
 		}
 	}()
-	var lastErr string
+	var errs changeLogger
 	for {
 		l, err := net.Listen("tcp4", dnsListenAddress)
 		if err != nil {
-			if err.Error() != lastErr {
-				log.Printf("dns: listen tcp: %v", err)
-				lastErr = err.Error()
-			}
+			errs.printf("dns: listen tcp: %v", err)
 			time.Sleep(time.Second)
 			continue
 		}
-		lastErr = ""
+		errs.reset()
 		for {
 			c, err := l.Accept()
 			if err != nil {

@@ -27,13 +27,9 @@ public enum Subprocess {
         process.standardError = inheritingStandardError ? FileHandle.standardError : err
         process.standardInput = FileHandle.nullDevice
         try process.run()
-        // Drain both pipes at once: reading them one after the other blocks
-        // a child that fills the stderr pipe while stdout is being read.
-        // The drain runs on its own serial queue, which always gets a thread.
-        // On DispatchQueue.global() it could wait forever: that queue shares
-        // its per-CPU thread budget with the Swift cooperative pool, so
-        // callers blocked here on every pool thread (tests on a 3-CPU CI
-        // runner) left it no thread to run on.
+        // Drain both pipes at once, or a child filling stderr blocks while
+        // stdout is read. Its own serial queue, not global(): see the
+        // cooperative-pool gotcha in CLAUDE.md.
         nonisolated(unsafe) var stderrData = Data()
         let stderrDone = DispatchGroup()
         stderrDone.enter()

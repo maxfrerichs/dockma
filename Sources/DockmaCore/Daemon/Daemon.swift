@@ -8,7 +8,9 @@ public final class Daemon {
     /// The deadlines must stay ordered: dockerd's own shutdown (15 s with
     /// default container stop timeouts) < the guest shutdown script's wait
     /// (20 s) < this < the plist's `ExitTimeOut` (30 s) < `bootout` (40 s).
-    static let shutdownGrace: Duration = .seconds(25)
+    nonisolated static let shutdownGrace: Duration = .seconds(25)
+    /// How long a stop waits for an agent that isn't connected to dial in.
+    nonisolated static let agentConnectGrace: Duration = .seconds(2)
     static let timeSyncInterval: Duration = .seconds(30)
     /// How often ports that failed to bind are tried again.
     static let portRetryInterval: Duration = .seconds(10)
@@ -23,7 +25,7 @@ public final class Daemon {
     private var readyWaiters: [ControlReply] = []
     private var signalSources: [DispatchSourceSignal] = []
     private var state: DaemonStatus.State = .starting
-    private var stopRequested = false
+    private var isStopRequested = false
     /// The hard stop that ends the shutdown grace period.
     private var forceStopTask: Task<Void, Never>?
     /// When `requestStop()` ran; the full grace period counts from here.
@@ -121,19 +123,17 @@ public final class Daemon {
         self.ports = ports
         let agent = AgentClient()
         agent.onPorts = { [weak self] set in
-            guard let self, !self.stopRequested else { return }
+            guard let self, !self.isStopRequested else { return }
             ports.update(set)
         }
         agent.onConnect = { [weak self] in
             guard let self else { return }
-            if self.stopRequested {
+            if self.isStopRequested {
                 // A stop during boot can come before the agent runs; it can
                 // still power the guest off cleanly.
                 if self.agent?.send(.shutdown) == true, let stopRequestedAt = self.stopRequestedAt {
                     Log.info("agent connected during stop, asked the guest to power off")
-                    // Counted from the stop request, so an agent that keeps
-                    // reconnecting can't postpone the hard stop.
-                    self.scheduleForceStop(at: stopRequestedAt + Self.shutdownGrace)
+                    self.scheduleForceStop(at: Self.forceStopDeadline(requestedAt: stopRequestedAt, isShutdownSent: true))
                 }
                 return
             }
@@ -178,7 +178,7 @@ public final class Daemon {
         Task { [weak self] in
             while true {
                 try? await Task.sleep(for: Self.timeSyncInterval)
-                guard let self, !self.stopRequested else { return }
+                guard let self, !self.isStopRequested else { return }
                 self.agent?.send(.setTime(Date()))
             }
         }
@@ -188,7 +188,7 @@ public final class Daemon {
         Task { [weak self] in
             while true {
                 try? await Task.sleep(for: Self.portRetryInterval)
-                guard let self, !self.stopRequested else { return }
+                guard let self, !self.isStopRequested else { return }
                 if self.ports?.hasFailures == true { self.ports?.retryFailed() }
             }
         }
@@ -208,7 +208,7 @@ public final class Daemon {
             }
             reply.send(Data("{}".utf8))
         case .wait:
-            if stopRequested {
+            if isStopRequested {
                 reply.close()
             } else if agent?.isDockerReady == true {
                 sendStatus(to: reply)
@@ -239,7 +239,7 @@ public final class Daemon {
 
     /// Replies to every pending `wait` request with the current status.
     private func answerReadyWaiters() {
-        guard !stopRequested else { return }
+        guard !isStopRequested else { return }
         let waiters = readyWaiters
         readyWaiters.removeAll()
         waiters.forEach(sendStatus(to:))
@@ -254,8 +254,8 @@ public final class Daemon {
     /// Graceful shutdown: ask the agent to power off (fall back to the virtual
     /// power button), then hard-stop after the grace period.
     public func requestStop() {
-        guard !stopRequested else { return }
-        stopRequested = true
+        guard !isStopRequested else { return }
+        isStopRequested = true
         let now = ContinuousClock.now
         stopRequestedAt = now
         state = .stopping
@@ -274,12 +274,18 @@ public final class Daemon {
         // guest doesn't run). A booting guest's agent dials in within about a
         // second and gets the request then (see onConnect); otherwise only a
         // short grace period is useful.
-        if agent?.send(.shutdown) == true {
-            scheduleForceStop(at: now + Self.shutdownGrace)
-        } else {
-            Log.info("agent not connected; stopping VM in 2 s unless it connects")
-            scheduleForceStop(at: now + .seconds(2))
-        }
+        let isShutdownSent = agent?.send(.shutdown) == true
+        if !isShutdownSent { Log.info("agent not connected; stopping VM in \(Self.agentConnectGrace) unless it connects") }
+        scheduleForceStop(at: Self.forceStopDeadline(requestedAt: now, isShutdownSent: isShutdownSent))
+    }
+
+    /// When the VM is hard-stopped after a stop requested at `requestedAt`.
+    /// Always counted from the request, so an agent that keeps reconnecting
+    /// can't postpone the hard stop.
+    nonisolated static func forceStopDeadline(
+        requestedAt: ContinuousClock.Instant, isShutdownSent: Bool
+    ) -> ContinuousClock.Instant {
+        requestedAt + (isShutdownSent ? shutdownGrace : agentConnectGrace)
     }
 
     /// Hard-stops the VM at `deadline` unless the guest powers off first,
@@ -304,12 +310,12 @@ public final class Daemon {
         cleanUp()
         if let error {
             Log.info("VM stopped with error: \(error)")
-        } else if stopRequested {
+        } else if isStopRequested {
             Log.info("VM stopped")
         } else {
             Log.info("guest powered off unexpectedly")
         }
-        exit(Self.exitCode(stopRequested: stopRequested))
+        exit(Self.exitCode(stopRequested: isStopRequested))
     }
 
     /// The exit code after the VM stopped, which decides whether launchd
@@ -362,16 +368,7 @@ public final class Daemon {
     /// second daemon (say `dockma daemon` by hand next to the launchd job)
     /// can't boot another VM on the same data disk. Returns the descriptor.
     nonisolated static func acquireLock(at url: URL) throws -> Int32 {
-        let fd = open(url.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
-        guard fd >= 0 else { throw DockmaError.posix("open \(url.path)") }
-        guard flock(fd, LOCK_EX | LOCK_NB) == 0 else {
-            let error = errno == EWOULDBLOCK
-                ? DockmaError("another dockma daemon is running (\(url.path) is locked)")
-                : DockmaError.posix("lock \(url.path)")
-            close(fd)
-            throw error
-        }
-        return fd
+        try FileLock.acquire(at: url, busyMessage: "another dockma daemon is running")
     }
 
     /// launchd appends the daemon's stdout and stderr to daemon.log forever.

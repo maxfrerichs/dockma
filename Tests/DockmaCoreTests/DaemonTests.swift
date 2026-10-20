@@ -48,3 +48,17 @@ import Testing
     #expect(contents(log.appendingPathExtension("3")) == "run 2")
     #expect(contents(log.appendingPathExtension("4")) == nil)
 }
+
+@Test func forceStopIsCountedFromTheStopRequest() {
+    let requested = ContinuousClock.now
+    #expect(Daemon.forceStopDeadline(requestedAt: requested, isShutdownSent: true) == requested + Daemon.shutdownGrace)
+    #expect(Daemon.forceStopDeadline(requestedAt: requested, isShutdownSent: false) == requested + .seconds(2))
+}
+
+@Test func shutdownGraceEndsBeforeLaunchdKillsTheDaemon() throws {
+    let paths = Paths(root: URL(fileURLWithPath: "/tmp/dockma-plist"), home: URL(fileURLWithPath: "/tmp"))
+    let data = try LaunchAgent(paths: paths, executable: "/bin/dockma").plist(autostart: false)
+    let plist = try #require(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+    let exitTimeOut = try #require(plist["ExitTimeOut"] as? Int)
+    #expect(Daemon.shutdownGrace < .seconds(exitTimeOut))
+}

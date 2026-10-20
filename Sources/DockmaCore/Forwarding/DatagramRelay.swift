@@ -118,7 +118,7 @@ public final class DatagramRelay: @unchecked Sendable {
             // reused descriptor.
             lock.withLock { _ = Darwin.close(fd) }
         }
-        let interval = DispatchTimeInterval.nanoseconds(Self.nanoseconds(min(limits.idleTimeout / 4, .seconds(5))))
+        let interval = DispatchTimeInterval.nanoseconds(Int(min(limits.idleTimeout / 4, .seconds(5)) / .nanoseconds(1)))
         sweeper.schedule(deadline: .now() + interval, repeating: interval)
         sweeper.setEventHandler { [weak self] in self?.expireIdleFlows() }
         source.resume()
@@ -255,8 +255,7 @@ public final class DatagramRelay: @unchecked Sendable {
     private func didConnect(_ flow: Flow, guest: Int32) {
         // A write blocked this long fails and ends the flow, so stalled flows
         // can't pile up blocked threads in dispatch's limited pool.
-        var timeout = timeval(tv_sec: 5, tv_usec: 0)
-        setsockopt(guest, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        SocketOptions.setTimeout(seconds: 5, on: guest, for: [SO_SNDTIMEO])
         let isLive = lock.withLock {
             guard !flow.isClosed else { return false }
             flow.guest = guest
@@ -325,12 +324,6 @@ public final class DatagramRelay: @unchecked Sendable {
         discardPending(of: flow)
         if flows[flow.key] === flow { flows.removeValue(forKey: flow.key) }
         if flow.guest >= 0 { shutdown(flow.guest, SHUT_RDWR) }
-    }
-
-    /// The whole nanoseconds in `duration`.
-    private static func nanoseconds(_ duration: Duration) -> Int {
-        let (seconds, attoseconds) = duration.components
-        return Int(seconds) * 1_000_000_000 + Int(attoseconds / 1_000_000_000)
     }
 }
 

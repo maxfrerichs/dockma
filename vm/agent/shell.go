@@ -99,15 +99,13 @@ func (fw *frameWriter) write(t byte, payload []byte) error {
 }
 
 func (fw *frameWriter) exit(code int) error {
-	var p [4]byte
-	binary.BigEndian.PutUint32(p[:], uint32(int32(code)))
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 	if fw.done {
 		return errSessionOver
 	}
 	fw.done = true
-	_, err := fw.w.Write(encodeFrame(frameExit, p[:]))
+	_, err := fw.w.Write(encodeFrame(frameExit, uint32Payload(int(int32(code)))))
 	return err
 }
 

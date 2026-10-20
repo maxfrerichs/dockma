@@ -1,61 +1,32 @@
 # dockma
 
-Lightweight Docker on macOS, free and open source.
-
-Website and command reference: <https://dockma.dev>
+Lightweight Docker on macOS, free and open source. Website and command reference: <https://dockma.dev>
 
 ## tl;dr
 
-dockma boots a minimal Linux VM with Apple's Virtualization.framework and runs the Docker Engine inside it. The macOS `docker` CLI talks to it through a Unix socket, and a launchd job keeps it running in the background. Your home directory is shared into the VM.
+dockma runs the Docker Engine in a minimal Linux VM on Apple's Virtualization.framework. The macOS `docker` CLI communicates via a Unix socket. A launchd job keeps it running, and your home directory is shared into the VM.
+
+> **Status:** early and experimental, tested only on Apple Silicon with macOS 27. Read the [Limitations](#limitations).
 
 ## Features
 
-- **Minimal guest OS.**
-  - Kernel: a custom 6.18 LTS kernel built from `tinyconfig` plus only the drivers and features Docker needs. Everything is built in, with no modules. It is compiled with `-O2` and the regular SLUB allocator, not tinyconfig's size-first `-Os` and `SLUB_TINY`.
-  - Userspace: a busybox initramfs containing Docker's static binaries and a small guest agent.
-  - Boots in around 1.1s
-- **Shared `$HOME` directory.**
-  - `$HOME` is mounted inside the VM at the identical path (for example `/Users/you`) via virtiofs.
-  - So `docker run -v "$PWD:/src"` works from anywhere under your home directory.
-- **Published ports on localhost.**
-  - `docker run -p 8080:80 …` is reachable at `localhost:8080` (IPv4 and IPv6), with no manual forwarding. UDP works the same way: `-p 1053:53/udp` answers on `localhost:1053`.
-  - Each UDP client gets its own tunnel and source port in the VM. It ends about 90 s after its last packet in either direction, matching docker-proxy.
-  - The listener goes away when the container stops.
-  - Ports below 1024, such as DDEV's router on 80 and 443, work too. macOS lets a non-root process bind them only on the wildcard address, so with the default `127.0.0.1` the daemon listens on `0.0.0.0` and `::` and closes any connection that isn't from a loopback address. UDP ports do the same and drop datagrams from non-loopback senders.
-    - Other machines can't use the port, but a port scan from the network sees a TCP port as open, because the TCP handshake completes before the close. A UDP port looks `open|filtered`.
-    - Anything else listening on `*:80` conflicts with it.
-    - A process running as root that holds `127.0.0.1:80` itself takes precedence: dockma's listener starts without error but receives none of that traffic.
-    - The daemon logs the first connection it closes, or datagram it drops, on each listener, so `dockma logs --daemon` shows why a remote client got no answer.
-    - macOS may ask whether `dockma` may accept incoming connections. The listener stays loopback-only whatever you answer.
-- **Containers reach the Mac.**
-  - `host.docker.internal` (and `gateway.docker.internal`) resolves to the Mac in every container, as on Docker Desktop, and `--add-host name:host-gateway` does too. A service on the Mac must listen on more than `127.0.0.1` to be reachable.
-- **Run amd64 images via Rosetta.**
-  - `docker run --platform linux/amd64 …` runs x86-64 images through Rosetta for Linux.
-- **Runs in the background.**
-  - A per-user launchd job keeps the VM running after the CLI exits.
-  - It restarts the VM if the guest crashes. A guest kernel panic reboots the guest after 5 s.
-- **A shell in the VM.**
-  - `dockma shell` opens a root shell inside the VM; `dockma shell -- <cmd>` runs a single command there.
-  - It goes through the guest agent rather than Docker, so it still works when dockerd is broken.
-- **Graceful shutdown.**
-  - `dockma stop` asks the guest to stop dockerd and power off cleanly.
-  - Your images, containers and volumes persist on a sparse disk image.
-
-> **Status:** early and experimental. It has only been tested on Apple Silicon with macOS 27. Expect rough edges; see [Limitations](#limitations). It is designed and optimized for Apple Silicon.
+| Feature | What you get |
+|---|---|
+| Minimal guest | A custom 6.18 LTS kernel with only what Docker needs, no modules, and a busybox initramfs with Docker's static binaries. Docker is ready about 0.6 s after boot starts. |
+| Shared home | `$HOME` is mounted into the VM at the same path, so `docker run -v "$PWD:/src"` works anywhere under it. |
+| Ports on localhost | `-p 8080:80` answers on `localhost:8080` (IPv4 and IPv6), UDP included. Ports below 1024 work too ([details](#ports-below-1024)). |
+| Containers reach the Mac | `host.docker.internal` and `--add-host name:host-gateway` resolve to the Mac, as on Docker Desktop. A Mac service must listen on more than `127.0.0.1` to be reachable. |
+| amd64 images | `--platform linux/amd64` runs through Rosetta for Linux. |
+| Runs in the background | A launchd job keeps the VM up and restarts it if the guest crashes. |
+| Shell in the VM | `dockma shell` opens a root shell, even when dockerd is broken. |
+| Graceful shutdown | `dockma stop` powers the guest off cleanly. Images, containers and volumes persist on a sparse disk image. |
 
 ## Requirements
 
-- An Apple Silicon Mac (arm64).
-- macOS 14 or later. The package targets macOS 14, but only macOS 27 has been tested.
-- Xcode with Swift 6.4, for building the CLI.
-- The `docker` CLI on macOS, e.g. `brew install docker`. dockma provides the engine, not the client.
-- **To build the guest image:** any arm64 Docker engine with buildx, such as Lima, Colima or Docker Desktop. Once dockma runs, it can rebuild its own guest. The build downloads from:
-  - kernel.org
-  - download.docker.com
-  - GitHub
-  - Docker Hub (Alpine and Go images)
-  - the Go module proxy
-- **Optional:** Rosetta, for amd64 images. Install it with `softwareupdate --install-rosetta`.
+- An Apple Silicon Mac, macOS 14 or later (only macOS 27 is tested).
+- The `docker` CLI, e.g. `brew install docker`. dockma provides the engine, not the client.
+- Optional: Rosetta for amd64 images (`softwareupdate --install-rosetta`).
+- Building from source also needs Xcode with Swift 6.4, and an arm64 Docker engine with buildx for the guest (Lima, Colima, Docker Desktop, or dockma itself once it runs). The guest build downloads from kernel.org, download.docker.com, GitHub, Docker Hub and the Go module proxy.
 
 ## Quick start
 
@@ -67,92 +38,67 @@ dockma start
 docker context use dockma
 ```
 
-[`install.sh`](install.sh) does the steps of [From a release](#from-a-release) for you:
-1. It downloads `dockma-<version>-macos-arm64.tar.gz` from the newest release and checks it against that release's `SHA256SUMS`.
-2. If `gh` is installed and logged in, it also checks the tarball's build provenance attestation and aborts if that fails.
-3. It fetches the matching guest with the new binary's `dockma install`, then installs `dockma` to `~/.local/bin`. If the guest download fails, the installed binary and guest are left as they were.
+[`install.sh`](install.sh) installs the newest release:
 
-It doesn't start the VM or edit your shell profile, and it tells you when `~/.local/bin` isn't on your `PATH`. Run it again to upgrade; if a VM is running, it tells you to `dockma restart`. The site serves a copy of the script in this repository.
+1. It downloads the CLI tarball and checks it against the release's `SHA256SUMS`, and against its build attestation when a logged-in `gh` is available.
+2. It fetches the matching guest with `dockma install`. If that fails, nothing changes.
+3. It installs `dockma` to `~/.local/bin`, and tells you if that isn't on your `PATH`.
+
+It doesn't start the VM or edit your shell profile. Run it again to upgrade.
 
 | Variable | Effect |
 |---|---|
-| `DOCKMA_VERSION` | Install this release instead of the newest. 0.3.0 or later: older releases lack `dockma install`. |
+| `DOCKMA_VERSION` | Install this release (0.3.0 or later) instead of the newest |
 | `DOCKMA_INSTALL_DIR` | Install the binary here instead of `~/.local/bin` |
 | `DOCKMA_SKIP_GUEST=1` | Install only the CLI; run `dockma install` later |
-| `DOCKMA_RELEASE_URL` | Read the release assets from this directory (a URL or an absolute path) instead of GitHub. Needs `DOCKMA_VERSION`; `dockma install` reads it too. |
+| `DOCKMA_RELEASE_URL` | Read release assets from this URL or absolute path instead of GitHub. Needs `DOCKMA_VERSION`; `dockma install` reads it too. |
 
 ### From a release
 
-Each [release](../../releases) has three files:
-- `dockma-<version>-macos-arm64.tar.gz`: the signed `dockma` binary;
-- `dockma-linux-<version>-arm64.tar.gz`: dockma-linux, the guest kernel, initramfs and `guest-protocol`, built for that version's protocol;
-- `SHA256SUMS`.
-
-Install the CLI, then let it fetch dockma-linux from the same release:
+Each [release](../../releases) has the CLI (`dockma-<version>-macos-arm64.tar.gz`), the guest (`dockma-linux-<version>-arm64.tar.gz`) and `SHA256SUMS`.
 
 ```sh
 shasum -a 256 -c SHA256SUMS --ignore-missing
-# Only for files downloaded with a browser: macOS kills a quarantined,
-# unnotarized binary at launch.
-xattr -d com.apple.quarantine dockma-*-macos-arm64.tar.gz
-
+xattr -d com.apple.quarantine dockma-*-macos-arm64.tar.gz   # only if a browser downloaded it
 mkdir -p ~/.local/bin
 tar -xzf dockma-*-macos-arm64.tar.gz -C ~/.local/bin dockma
-
-dockma install    # downloads dockma-linux-<version>-arm64.tar.gz into ~/.dockma/guest
+dockma install          # fetches and verifies this version's guest into ~/.dockma/guest
 dockma start
 docker context use dockma
 ```
 
-`dockma install` downloads the guest for its own version (`dockma --version`), checks it against the release's `SHA256SUMS` and the guest protocol, and replaces `~/.dockma/guest` in one atomic step. A running VM keeps its guest until `dockma restart`. `DOCKMA_RELEASE_URL` points it at another directory with the same files (a URL such as a mirror, or a local path). Without network access, unpack the tarball yourself: `tar -xzf dockma-linux-*.tar.gz -C ~/.dockma/guest`.
-
-The binary is ad-hoc signed, not notarized. `curl` doesn't quarantine what it downloads, so the `xattr` step isn't needed then. `gh attestation verify <file> --repo <owner>/dockma` checks that a tarball was built by this repository's release workflow; `dockma install` doesn't do that check.
+- The binary is ad-hoc signed, not notarized. macOS kills a quarantined copy at launch, hence the `xattr` step for browser downloads.
+- `gh attestation verify <file> --repo <owner>/dockma` checks that a tarball came from this repository's release workflow.
+- `dockma install` replaces the guest atomically; a running VM keeps the old one until `dockma restart`. Offline, unpack the guest tarball into `~/.dockma/guest` yourself.
 
 ### From source
 
 ```sh
-# 1. Build the guest kernel and initramfs (needs an existing arm64 Docker engine)
-make guest
-make install-guest            # copies vm/out/* to ~/.dockma/guest/
-
-# 2. Build, sign and install the CLI to ~/.local/bin/dockma
-make install
-
-# 3. Start the VM
+make guest install-guest     # build the guest kernel and initramfs, copy them to ~/.dockma/guest
+make install                 # build, sign and install ~/.local/bin/dockma
 dockma start
-
-# 4. Point the docker CLI at dockma
-docker context use dockma     # created by `dockma start`
-# or: export DOCKER_HOST=unix://$HOME/.dockma/docker.sock
-
+docker context use dockma    # or: export DOCKER_HOST=unix://$HOME/.dockma/docker.sock
 docker run --rm hello-world
 ```
 
-If `DOCKER_HOST` is already set, it takes precedence over docker contexts. This happens with Lima, for example. Either unset it or point it at `unix://$HOME/.dockma/docker.sock`. `dockma start` and `dockma status` warn when `DOCKER_HOST` points elsewhere.
+> **Never use plain `swift build`.** It produces a binary without the `com.apple.security.virtualization` entitlement, and `dockma start` refuses to run it. Use `make build` or `make install`.
 
-> **Always build with `make build` or `make install`, never plain `swift build`.**
-> - Running VMs requires the `com.apple.security.virtualization` entitlement.
-> - `swift build` produces an unsigned binary without it.
-> - `dockma start` refuses to run without the entitlement.
+A `DOCKER_HOST` that is already set (Lima sets one, for example) overrides docker contexts. Unset it or point it at dockma's socket; `dockma start` and `dockma status` warn about it.
 
 ## Usage
 
-```
-dockma install                    Download this version's Linux guest (dockma-linux) into ~/.dockma/guest
-dockma start [--timeout <s>]      Start the VM in the background and wait until Docker answers
-dockma stop                       Shut the VM down gracefully
-dockma restart [--timeout <s>]    Stop, then start
-dockma status [--json]            State, uptime, resources, guest kernel, forwarded ports
-dockma shell [-t|-T] [-- cmd …]   Root shell in the VM, or run a command there
-dockma logs [-n N] [-f]           Kernel and boot log of the VM
-dockma logs --docker [-n N] [-f]  dockerd's log
-dockma logs --daemon [-n N] [-f]  Log of the host-side daemon (VM lifecycle, port forwards)
-dockma config [options]           Show or change settings (applied on next start)
-dockma delete [-f]                Delete the data disk (all images, containers, volumes), config and logs
-dockma --version                  Print the version
-```
-
-Example:
+| Command | Does |
+|---|---|
+| `dockma install` | Download this version's guest into `~/.dockma/guest` |
+| `dockma start [--timeout <s>]` | Start the VM and wait until Docker answers |
+| `dockma stop` | Shut the VM down gracefully |
+| `dockma restart [--timeout <s>]` | Stop, then start |
+| `dockma status [--json]` | State, uptime, resources, kernel, forwarded ports |
+| `dockma shell [-t\|-T] [-- cmd …]` | Root shell in the VM, or run one command there |
+| `dockma logs [--docker\|--daemon] [-n N] [-f]` | VM console log, dockerd's log, or the host daemon's log |
+| `dockma config [options]` | Show or change settings |
+| `dockma delete [-f]` | Delete the data disk (all images, containers, volumes), config and logs |
+| `dockma --version` | Print the version |
 
 ```console
 $ dockma status
@@ -160,7 +106,7 @@ state:    running
 docker:   ready (/Users/you/.dockma/docker.sock)
 uptime:   12m 4s
 vm:       6 CPUs, 4096 MiB, kernel 6.18.57-dockma
-agent:    connected 0.5.0
+agent:    connected 0.6.1
 ports:    8080, 1053/udp
 daemon:   pid 55658
 ```
@@ -168,87 +114,76 @@ daemon:   pid 55658
 ### Shell
 
 ```console
-$ dockma shell                     # interactive login shell (root, in /root)
-dockma:~# cat /proc/meminfo | head -3
-dockma:~# exit
-
-$ dockma shell -- uname -r          # run one command; stdout, stderr and exit code pass through
-6.18.57-dockma
-$ dockma shell -- sh -c 'ls /var/lib/docker' | wc -l
-$ echo data | dockma shell -- cat   # stdin is forwarded
+$ dockma shell                       # interactive root login shell
+$ dockma shell -- uname -r           # one command; stdout, stderr and exit code pass through
+$ echo data | dockma shell -- cat    # stdin is forwarded
 ```
 
-The interactive shell greets you with the Docker whale saying a random quip, whalesay style, followed by a status line: kernel, uptime and data disk usage. `dockma shell -- cmd` prints only the command's output. To list every quip, run `dockma shell -- /usr/libexec/dockma-motd --all`.
-
-TTY handling follows ssh:
-- `dockma shell` gets a pseudo-terminal when stdin is a terminal. Window resizes are forwarded, and Ctrl-C reaches remote programs.
-- `dockma shell -- cmd` uses plain pipes. stdout and stderr stay separate, and Ctrl-C is forwarded to the command as SIGINT.
-- `-t` forces a pseudo-terminal, and `-T` disables it.
-- A missing command exits with 127.
-- If the client goes away, the remote process gets SIGHUP, then SIGKILL after 2 s.
-- There is no escape sequence like ssh's `~.`. If the agent stops responding, kill the `dockma shell` process from another terminal.
-
-Use it to inspect the VM, for example `ps`, `mount`, `nft list ruleset` and `cat /proc/pressure/memory`. `docker` itself isn't installed in the VM. Use `docker exec` from macOS to get into a container.
+- Like ssh, it uses a pseudo-terminal when stdin is a terminal and plain pipes for a command. `-t` forces a terminal and `-T` disables it.
+- Ctrl-C reaches the remote program. If the client goes away, the remote process gets SIGHUP, then SIGKILL after 2 s.
+- A missing command exits with 127. There is no `~.` escape: if the agent hangs, kill `dockma shell` from another terminal.
+- It talks to the guest agent, not Docker, so it works while dockerd is down. `docker` isn't installed in the VM; use `docker exec` from macOS for containers.
+- The interactive shell greets you with a whale quip and a status line. `dockma shell -- /usr/libexec/dockma-motd --all` lists every quip.
 
 ### Configuration
 
-`dockma config` with no options prints the current settings. Changes take effect on the next `dockma restart`.
+`dockma config` without options prints the settings. Changes apply on the next `dockma restart`.
 
 | Option | Default | Description |
 |---|---|---|
 | `--cpus <n>` | half the host's cores (min. 2) | Virtual CPUs |
 | `--memory <MiB>` | `4096` | Guest memory |
-| `--disk <GiB>` | `64` | Size of the sparse data disk. It can only grow; the guest grows the filesystem on boot. |
-| `--port-bind-address <ip>` | `127.0.0.1` | Host address that published ports bind to. With `127.0.0.1` they're also bound on `::1`; with `0.0.0.0`, also on `::`. Use `0.0.0.0` to expose them to your network. With a loopback address, ports below 1024 bind the wildcard and accept only loopback peers. |
+| `--disk <GiB>` | `64` | Sparse data disk. It can only grow. |
+| `--port-bind-address <ip>` | `127.0.0.1` | Where published ports bind. Loopback also binds `::1`; `0.0.0.0` also binds `::` and exposes ports to your network. |
 | `--rosetta <bool>` | `true` | Attach Rosetta for amd64 images |
-| `--autostart <bool>` | `false` | Start dockma at login. This installs the launchd plist into `~/Library/LaunchAgents`. |
+| `--autostart <bool>` | `false` | Start dockma at login (installs the plist into `~/Library/LaunchAgents`) |
 
-Settings are stored in `~/.dockma/config.json`. The VM's MAC address is generated once and stored there, so the VM keeps the same NAT IP across restarts. `config` warns when `--cpus` exceeds the Mac's cores or `--memory` exceeds 75% of its RAM, and refuses a `--disk` smaller than the current disk.
+Settings live in `~/.dockma/config.json`, along with a generated MAC address that keeps the VM's IP stable. `config` warns when `--cpus` exceeds the Mac's cores or `--memory` 75% of its RAM.
 
 #### Docker daemon settings and certificates
 
-The VM's root filesystem is rebuilt on every boot, so changes made with `dockma shell` don't last. Put them in the state directory instead; they apply on the next `dockma restart`:
+The VM's root filesystem is rebuilt on every boot, so changes made in `dockma shell` don't last. Put them in the state directory; they apply on the next `dockma restart`:
 
 | Path | Effect |
 |---|---|
-| `~/.dockma/daemon.json` | Merged over dockma's dockerd configuration: registry mirrors, insecure registries, `proxies`, `default-address-pools`, `log-opts` and so on. `hosts`, `group`, `data-root` and `firewall-backend` stay dockma's. If dockerd rejects the result, it starts with dockma's configuration and `dockma logs --docker` says why. |
-| `~/.dockma/ca-certificates/*.crt` | Extra CA certificates, added to the bundle dockerd uses, for example for a TLS-intercepting corporate proxy. |
-| `~/.dockma/certs.d/` | Per-registry certificates in Docker's [`certs.d` layout](https://docs.docker.com/engine/security/certificates/). |
+| `~/.dockma/daemon.json` | Merged over dockma's dockerd configuration (registry mirrors, `proxies`, `default-address-pools`, `log-opts`, …). `hosts`, `group`, `data-root` and `firewall-backend` stay dockma's. If dockerd rejects the result, it starts with dockma's configuration and `dockma logs --docker` says why. |
+| `~/.dockma/ca-certificates/*.crt` | Extra CA certificates, e.g. for a TLS-intercepting proxy |
+| `~/.dockma/certs.d/` | Per-registry certificates in Docker's [`certs.d` layout](https://docs.docker.com/engine/security/certificates/) |
 
-dockma's defaults, which `daemon.json` can override: each container's log is capped at three 10 MB files (`log-opts`), and `host-gateway` is the Mac (`host-gateway-ips`). The guest reads these files over the home share, so with a `DOCKMA_HOME` outside your home directory they aren't seen.
+dockma's own defaults, which `daemon.json` can override: container logs are capped at three 10 MB files, and `host-gateway` is the Mac. The guest reads these files over the home share, so a `DOCKMA_HOME` outside your home directory can't use them.
+
+### Ports below 1024
+
+macOS lets a non-root process bind a low port only on the wildcard address. So with a loopback bind address, dockma listens on `0.0.0.0` and `::` and closes connections (or drops datagrams) from anything but loopback. Consequences:
+
+- A port scan from the network sees the TCP port as open (the handshake completes before the close), and a UDP port as `open|filtered`.
+- Anything else listening on `*:80` conflicts. A root process holding `127.0.0.1:80` wins, and dockma's listener gets none of that traffic.
+- macOS may ask whether `dockma` may accept incoming connections. The listener stays loopback-only whatever you answer.
+- `dockma logs --daemon` shows the first rejected peer on each listener.
 
 ### Files
 
-Everything lives under `~/.dockma`. You can override the location with `DOCKMA_HOME`, but socket paths must stay under 104 bytes. Each state directory is a separate VM with its own launchd job (`io.dockma.daemon` for `~/.dockma`, `io.dockma.daemon.<hash>` for others), so a second instance never touches the first. Only `~/.dockma` gets the `dockma` docker context.
-
-The directory and `logs/` are kept at mode 0700, and `data.img`, `config.json` and the VM logs at 0600: the data disk holds everything containers store, and other local accounts can often traverse a macOS home directory. dockma resets these modes on every start.
+Everything lives under `~/.dockma`, or `DOCKMA_HOME` (socket paths must stay under 104 bytes). Each state directory is a separate VM with its own launchd job; only `~/.dockma` gets the `dockma` docker context. The directory and `logs/` are kept at mode 0700, the disk, config and logs at 0600, reset on every start.
 
 | Path | Contents |
 |---|---|
-| `docker.sock` | Docker API socket for the macOS `docker` CLI |
-| `control.sock` | CLI ↔ daemon control socket |
-| `shell.sock` | Shell sessions (`dockma shell`), proxied to the guest agent |
-| `daemon.lock` | Held by the running daemon, so a second one can't boot another VM on the same disk |
+| `docker.sock`, `control.sock`, `shell.sock` | Docker API, CLI↔daemon control, and shell sessions |
 | `config.json` | Settings |
-| `daemon.json`, `ca-certificates/`, `certs.d/` | Optional dockerd settings and certificates; see [Docker daemon settings and certificates](#docker-daemon-settings-and-certificates) |
-| `data.img` | Sparse raw disk, ext4, mounted at `/var/lib/docker` in the guest |
-| `guest/dockma-kernel`, `guest/dockma-initrd.img` | Guest kernel and lz4 initramfs, named as LinuxKit names them, from `dockma install` or `make install-guest` |
-| `guest/guest-protocol` | The host↔guest protocol number the guest was built for. `dockma start` refuses a guest that doesn't match. |
-| `.guest-install.lock` | Held by a running `dockma install`, which also clears staging folders that a killed install left behind |
-| `logs/console.log` | Kernel and init output; the three previous boots are kept as `console.log.1` (newest) to `.3` |
-| `logs/docker.log` | dockerd output; previous boots as `docker.log.1` to `.3` |
-| `logs/daemon.log` | Host daemon output; previous runs as `daemon.log.1` to `.3` |
-| `io.dockma.daemon.plist` | launchd job definition (`io.dockma.daemon.<hash>.plist` for a `DOCKMA_HOME`). With `--autostart true` it lives in `~/Library/LaunchAgents` instead. |
+| `daemon.json`, `ca-certificates/`, `certs.d/` | Optional dockerd settings, see [above](#docker-daemon-settings-and-certificates) |
+| `data.img` | Sparse ext4 disk, mounted at `/var/lib/docker` in the guest |
+| `guest/` | Guest kernel, initramfs and its protocol number, from `dockma install` or `make install-guest` |
+| `logs/console.log`, `docker.log`, `daemon.log` | Kernel and init, dockerd, and host daemon output; three previous runs kept as `.1`–`.3` |
+| `daemon.lock`, `.guest-install.lock` | Held by the running daemon and by a running `dockma install` |
+| `io.dockma.daemon.plist` | The launchd job (`io.dockma.daemon.<hash>.plist` for a `DOCKMA_HOME`; in `~/Library/LaunchAgents` with autostart) |
 
 ### Uninstall
 
 ```sh
 dockma stop
-dockma delete --force                 # data disk, config, logs, launchd plists, docker context
-rm -rf ~/.dockma                      # the guest image and anything left in the state directory
-rm ~/.local/bin/dockma                # or wherever you installed it
+dockma delete --force      # data disk, config, logs, launchd plists, docker context
+rm -rf ~/.dockma           # the guest and anything left
+rm ~/.local/bin/dockma     # or wherever you installed it
 ```
-
 
 ## How it works
 
@@ -275,140 +210,92 @@ dockma shell ► ~/.dockma/shell.sock  │                        │
   virtio-net (NAT), virtio-rng, virtio-balloon, PL031 RTC
 ```
 
-**Host side (Swift).** A `VZVirtualMachine` lives only as long as the process that created it, so `dockma start` installs a launchd job that runs `dockma daemon`. The daemon:
-- boots the VM;
-- serves `docker.sock` and `shell.sock`, piping each connection to the guest over vsock;
-- accepts the control connection that the guest agent opens as soon as it runs;
-- mirrors the guest's published ports as listeners on the host.
+**Host (Swift).** A `VZVirtualMachine` lives only as long as its process, so `dockma start` installs a launchd job that runs `dockma daemon`. The daemon boots the VM, pipes `docker.sock` and `shell.sock` to the guest over vsock, accepts the agent's control connection, and mirrors the guest's published ports on the host.
 
-`start` installs the job, then waits on `control.sock`, woken by kqueue events rather than a polling loop. Short fallback timers remain only for cases with no event to wait on, such as a daemon whose pid launchd hasn't reported yet. The daemon replies once the agent reports that dockerd's API answers. If the connection closes first, the daemon has exited, and `start` shows its log.
+- `start` waits on `control.sock`, woken by kqueue events. The daemon answers once the agent reports dockerd's API up; if the connection closes first, `start` shows the daemon's log.
+- `stop` unloads the job. The daemon asks the agent to power off and hard-stops the VM after 25 s (2 s without an agent).
+- launchd restarts the daemon when the guest powers off on its own or crashes, but not after a requested stop or a startup error. A guest kernel panic reboots the guest in place after 5 s, and the agent reconnects.
 
-`stop` unloads the launchd job. The daemon then asks the agent to power the guest off, and hard-stops the VM after 25 s if that doesn't finish (2 s if no agent is connected). launchd restarts the daemon if the guest powers off on its own or crashes. A kernel panic reboots the guest after 5 s (`panic=5`); Virtualization.framework restarts a rebooting Linux guest in place, so the daemon keeps running and the agent reconnects. It does not restart it after a requested stop or a startup error, so a broken setup doesn't end up in a restart loop.
+**Guest.**
 
-**Guest side.**
-- **Stage-0 `/init`** moves the initramfs contents into a tmpfs and runs `switch_root`, because runc can't `pivot_root` out of the initramfs root.
-- **busybox init** then:
-  - mounts the pseudo filesystems and cgroup v2;
-  - gets an address over DHCP;
-  - prepares `/dev/vda` and mounts it at `/var/lib/docker`. A blank disk is formatted; an existing one is checked with `e2fsck -p` and grown if the host enlarged the image. A disk that holds data but no readable ext4 is never formatted: dockerd stays down and the console log names the recovery command;
-  - mounts the home and Rosetta shares, and adds the user's CA certificates.
-- **dockerd** runs with `firewall-backend: nftables`, so the guest ships `nft` instead of iptables. Its configuration is generated before each start from the baked `daemon.json`, the user's `daemon.json` and dockma's defaults. The kernel also has what Docker-in-Docker, kind, k3s and k3d run inside containers: xtables over nftables (`NFT_COMPAT`) for iptables-nft in both address families, ipset, VXLAN for flannel, and nfqueue and conntrack labels for kind's network policy. `/dev/net/tun` serves VPN containers. Everything is built in, with no loadable modules; `/proc/config.gz` lists what the kernel has, and `scripts/e2e.sh` checks the features these workloads use.
+- **Stage-0 `/init`** moves the initramfs into a tmpfs and runs `switch_root`, because runc can't `pivot_root` out of the initramfs.
+- **busybox init** mounts cgroup v2 and the pseudo filesystems, gets an address over DHCP, mounts the home and Rosetta shares, and adds your CA certificates. It mounts `/dev/vda` at `/var/lib/docker`: a blank disk is formatted, an existing one checked with `e2fsck -p` and grown if the image grew. A disk with data but no readable ext4 is never formatted; dockerd stays down and the console log names the recovery command.
+- **dockerd** uses `firewall-backend: nftables`, so the guest ships `nft`, not iptables. Its configuration is generated before each start from the baked `daemon.json`, yours, and dockma's defaults. The kernel also has what Docker-in-Docker, kind, k3s and k3d need in containers: iptables-nft for both address families, ipset, VXLAN, nfqueue and conntrack labels, plus `/dev/net/tun`. `/proc/config.gz` lists everything.
 - **`dockma-agent`** (Go):
-  - proxies vsock to the Docker socket;
-  - dials the host's control port and reports when dockerd's API starts or stops answering. While dockerd is down it waits on inotify for the socket to appear rather than retrying;
-  - watches the Docker events API for published TCP and UDP ports and reports them to the host;
-  - dials tunnelled connections inside the VM. A UDP flow arrives as length-prefixed datagrams on one vsock connection per client;
-  - runs `dockma shell` sessions. Each session uses a small framed protocol (start, stdin, resize, signal, started, stdout, stderr, exit, window) and runs on a pty or on pipes. `window` frames grant stdin credit, so a signal is never stuck behind stdin the command doesn't read;
-  - steps the guest clock to host time every 30 s, which fixes drift after the Mac sleeps;
-  - serves DNS for containers: the DHCP hook points `resolv.conf` at the VM's own address and redirects port 53 there to the agent's port 10053 with nftables, for queries from containers and the VM itself. The agent answers `host.docker.internal` and `gateway.docker.internal` with the Mac's address and relays everything else to the DNS servers from the lease. Port 53 stays free, so containers can publish it (Pi-hole, AdGuard Home); other containers that query such a DNS server at the VM's address reach the agent instead, so point them at the DNS container by name or its container IP;
-  - runs `fstrim` on the data disk hourly, which shrinks `data.img` on the Mac after images and containers are deleted;
-  - accepts vsock connections only from the host (CID 2). The kernel has no vsock loopback, so processes in the VM, containers included, can't reach the agent's ports.
+  - proxies vsock to the Docker socket, and dials tunnelled TCP and UDP connections inside the VM;
+  - dials the host's control port and reports Docker readiness (waiting on inotify while dockerd is down) and published ports (from the Docker events API);
+  - runs `dockma shell` sessions on a pty or pipes, with stdin flow control so signals never wait behind unread input;
+  - steps the guest clock to the host's every 30 s, which fixes drift after the Mac sleeps;
+  - serves DNS on port 10053, reached through an nftables redirect of the VM's port 53: it answers `host.docker.internal` itself and relays the rest to the DHCP lease's servers. Port 53 stays free for containers like Pi-hole; containers that query such a server at the VM's address reach the agent instead, so point them at it by name or container IP;
+  - runs `fstrim` hourly, so `data.img` shrinks after you delete images;
+  - accepts vsock connections only from the host (CID 2); the kernel has no vsock loopback.
 
-**Guest image.** `vm/Dockerfile` builds everything reproducibly with pinned versions: kernel 6.18.57, Docker 29.9.1 and moby's `check-config.sh` (all sha256-checked), Alpine 3.24 and Go 1.27. It has two build gates:
-1. Every option in `vm/kernel/dockma.config` must survive `olddefconfig`, and every `# CONFIG_X is not set` line must stay disabled.
-2. The kernel config must pass moby's `check-config.sh` required list. The iptables-only options are exempt because of the nftables backend.
-
-The result is an 8.6 MB kernel and a 65 MB lz4 initramfs that unpacks to about 163 MB in guest RAM. lz4 is larger than zstd (42 MB) but unpacks in about 75 ms instead of 185 ms, which is most of the kernel's boot time.
+**Guest image.** `vm/Dockerfile` builds everything with pinned, sha256-checked versions: kernel 6.18.57, Docker 29.9.1, Alpine 3.24 and Go 1.27. The build fails if an option in `vm/kernel/dockma.config` doesn't survive `olddefconfig`, or the config misses an entry on moby's `check-config.sh` required list (iptables-only options are exempt). The result is a 9.6 MB kernel and a 68 MB lz4 initramfs that unpacks to about 163 MB of guest RAM. lz4 is larger than zstd but unpacks in about 75 ms instead of 185 ms.
 
 ## Development
 
 ```sh
-make build          # debug build + ad-hoc codesign with dockma.entitlements
+make build          # debug build, ad-hoc signed with dockma.entitlements
 make test           # unit tests (Swift Testing)
 make e2e            # build, then scripts/e2e.sh against a real VM
-make guest          # rebuild the guest; also runs the agent's go vet / go test
-make install-guest  # copy the rebuilt guest to $DOCKMA_HOME/guest (default ~/.dockma/guest)
-make site           # build the website into site/public (needs Hugo)
-make site-serve     # preview the website locally
-scripts/bench.sh    # boot phase breakdown; restarts the VM RUNS times (default 5)
+make guest          # rebuild the guest; also runs the agent's go vet and go test
+make install-guest  # copy the guest to $DOCKMA_HOME/guest (default ~/.dockma/guest)
+make site           # build the website into site/public (needs Hugo); make site-serve previews it
+scripts/bench.sh          # boot phase breakdown; restarts the VM RUNS times (default 5)
 scripts/bench-compare.py  # dockma vs Lima vs OrbStack; see docs/benchmarks.md
 ```
 
-`scripts/e2e.sh` pins `DOCKER_HOST` to dockma's socket and checks:
-- that the engine answering is dockma's;
-- hello-world;
-- the home bind mount;
-- stdin half-close;
-- localhost port forwarding and its removal, for TCP and for UDP on the same port;
-- a port held by a Mac process: reported by `status`, then forwarded once free;
-- `host.docker.internal` and `host-gateway`, on the default bridge and a user network, with port 53 still free to publish;
-- container limits, log rotation, `/dev/net/tun`, and that containers can't reach the agent over vsock;
-- Docker-in-Docker;
-- Rosetta;
-- logs;
-- persistence across restart, `daemon.json`, plus a registry pull;
-- a graceful stop.
+`make e2e` runs against its own VM in `~/.dockma-e2e`, so yours keeps running; it still mounts your real home. That VM's guest is copied from `~/.dockma/guest` if missing; test a fresh build with `make guest install-guest DOCKMA_HOME=~/.dockma-e2e`. The suite pins `DOCKER_HOST` to dockma's socket and covers forwarding (TCP, UDP, held ports), `host.docker.internal`, bind mounts, Docker-in-Docker, Rosetta, `daemon.json`, persistence across restart and a graceful stop.
 
-`make e2e` runs it against a VM of its own in `~/.dockma-e2e` (`E2E_HOME`), so your VM keeps running. That VM uses the guest in `~/.dockma-e2e/guest`, copied from `~/.dockma/guest` if missing; test a fresh build with `make guest install-guest DOCKMA_HOME=~/.dockma-e2e`. It still mounts your real home directory.
-
-To run the daemon in the foreground for debugging, stop the launchd job first (`dockma stop`). Then run `.build/debug/dockma daemon` and stop it with Ctrl-C.
+To debug the daemon in the foreground: `dockma stop`, then `.build/debug/dockma daemon`, and Ctrl-C to stop it.
 
 ### Layout
 
 ```
-Package.swift, Makefile, dockma.entitlements
-Sources/DockmaCore/       core library, grouped by area:
-  VM/                     VM configuration, VZ wrapper, kernel cmdline, entitlement check
-  Daemon/                 daemon lifecycle, launchd job, CLI↔daemon control protocol
-  Agent/                  control link to dockma-agent
-  Forwarding/             socket listeners, byte copying, vsock proxies, port forwarding
-  Shell/                  `dockma shell` protocol and client session
-  Settings/               config.json and the state directory layout
-  Support/                logging, line I/O, subprocess runner, docker context
-Sources/DockmaCLI/        the `dockma` command (swift-argument-parser)
-Tests/DockmaCoreTests/    unit tests
-vm/Dockerfile             guest build (kernel, rootfs, initramfs)
-vm/kernel/                Kconfig fragment and Docker requirements gate
-vm/rootfs/                init scripts, inittab, dockerd config, DHCP hook
-vm/agent/                 dockma-agent (Go) with tests
-vm/tests/                 guest script tests, run during the guest build
-scripts/e2e.sh            end-to-end test
-scripts/bench.sh          boot phase breakdown and build-step diagnostics (restarts the VM)
-scripts/bench-build-steps.py  per-step build times and extracted layers, for bench.sh
-scripts/bench-compare.py  benchmark against Lima and OrbStack; bench-report.py summarizes it
-scripts/bench-fixtures/   pinned workloads for bench-compare.py
-site/                     website (Hugo): templates, data, fonts; deployed to GitHub Pages by .github/workflows/pages.yml
-scripts/site-prepare.py   derives the site's version facts (vm/Dockerfile) and command reference (docc file)
-scripts/release-notes.py  prints a version's CHANGELOG.md section, for release.yml
-.github/workflows/        cli.yml, guest.yml (CI builds and tests), lint.yml (actionlint, shellcheck), release.yml (drafts a release from a tag), pages.yml
+Sources/DockmaCore/   core library: VM, Daemon, Agent, Forwarding, Shell, Settings, Terminal, Support
+Sources/DockmaCLI/    the dockma command (swift-argument-parser)
+Tests/DockmaCoreTests/
+vm/Dockerfile         guest build; vm/kernel/ (Kconfig fragment), vm/rootfs/ (init scripts, configs)
+vm/agent/             dockma-agent (Go) and its tests; vm/tests/ (guest script tests)
+scripts/              e2e.sh, benchmarks, site-prepare.py, release-notes.py
+site/                 website (Hugo), deployed by .github/workflows/pages.yml
+.github/workflows/    cli.yml, guest.yml, lint.yml, release.yml, pages.yml
 ```
 
 ### Releases
 
-CI builds each half on pushes to `main` and pull requests that touch it:
-- `cli.yml` runs `make test` and builds the signed release binary on GitHub's `xcode-27` runner (Xcode 27.1, Swift 6.4). It also fails if the committed docc reference is stale.
-- `guest.yml` runs `make guest` on an arm64 Ubuntu runner, with a BuildKit cache.
-- `lint.yml` runs actionlint and shellcheck (warnings and errors) over the workflows, `install.sh`, the scripts and the guest's boot scripts.
-
-Pushing a version tag (`0.2.0`, no `v`) runs `release.yml`. It rebuilds both from the tag without a cache, and drafts a GitHub release with the tarballs, `SHA256SUMS` and build provenance attestations. The notes are the tag's `CHANGELOG.md` section, and the workflow fails without one. Publish the draft by hand. For a tag pushed before `release.yml` existed, run the workflow manually with that tag.
-
-The workflows don't run `make e2e`: hosted macOS runners can't start a VM.
+- CI builds both halves on pushes to `main` and on pull requests: `cli.yml` (tests, signed binary, docc freshness) on the `xcode-27` runner, `guest.yml` on an arm64 Ubuntu runner, and `lint.yml` (actionlint, shellcheck).
+- Pushing a version tag (`0.2.0`, no `v`) runs `release.yml`. It rebuilds both without a cache and drafts a release with the tarballs, `SHA256SUMS`, attestations and the tag's `CHANGELOG.md` section. Publish the draft by hand.
+- CI can't run `make e2e`: hosted macOS runners can't start a VM.
 
 ## Troubleshooting
 
-- **`dockma start` says the binary lacks the entitlement.** You ran a plain `swift build`. Run `make build` or `make install`, then start again.
-- **`dockma start` times out or the daemon exits during startup.** On a terminal, `start` and `stop` show the latest console and daemon log lines in a small live panel while they wait. On failure, `start` prints the relevant log tail. Check it in full with `dockma logs --daemon` and `dockma logs`.
-- **A guest image is missing.** Run `dockma install`. A dockma built from source needs `make guest install-guest` instead.
-- **`docker` talks to a different engine.** Check `echo $DOCKER_HOST` and `docker context show`.
-- **dockerd doesn't start and `dockma logs` says the data disk is not mounted.** The guest refuses to format a disk that holds data. `dockma shell` still works: run `dockma shell -- e2fsck -fy /dev/vda`, which can recover a damaged superblock from a backup copy, then `dockma restart`.
-- **A published port isn't forwarded.** `dockma status` shows a warning for a port that a Mac process holds, and the daemon forwards it within 10 s of that process letting go. macOS itself holds some UDP ports, such as 5353 (mDNS), so publish those on another host port.
-- **A bind mount is empty.** Only your home directory is shared with the VM. A path outside it, such as `/tmp`, `/Volumes/…` or a `mktemp -d` directory under `$TMPDIR` (`/var/folders/…`), mounts an empty directory from inside the VM, without an error. Test suites and Testcontainers that bind-mount temp directories need them under your home, for example `TMPDIR=~/.cache/tmp`.
-- **`docker pull` fails with `x509: certificate signed by unknown authority`.** A proxy re-signs TLS traffic. Put its CA certificate in `~/.dockma/ca-certificates/` and run `dockma restart`.
+| Symptom | Fix |
+|---|---|
+| `dockma start` says the binary lacks the entitlement | You ran plain `swift build`. Use `make build` or `make install`. |
+| `start` times out, or the daemon exits during startup | `start` prints the relevant log tail; read it in full with `dockma logs --daemon` and `dockma logs`. |
+| The guest image is missing | `dockma install`, or `make guest install-guest` for a source build. |
+| `docker` talks to another engine | Check `echo $DOCKER_HOST` and `docker context show`. |
+| dockerd is down and `dockma logs` says the data disk isn't mounted | The guest won't format a disk holding data. Run `dockma shell -- e2fsck -fy /dev/vda`, then `dockma restart`. |
+| A published port isn't forwarded | `dockma status` warns when a Mac process holds the port; dockma takes it within 10 s of it being freed. macOS holds some UDP ports itself (5353 for mDNS): publish on another host port. |
+| A bind mount is empty | Only your home directory is shared. Paths like `/tmp`, `/Volumes/…` or `$TMPDIR` mount empty, without an error. For Testcontainers and similar, set e.g. `TMPDIR=~/.cache/tmp`. |
+| `x509: certificate signed by unknown authority` | A proxy re-signs TLS. Put its CA in `~/.dockma/ca-certificates/` and `dockma restart`. |
 
 ## Limitations
 
-- SCTP ports aren't forwarded.
-- With `--port-bind-address 0.0.0.0` on a Mac with several addresses, a UDP reply can leave from a different address than the one the client sent to. Clients that check the reply's source may ignore it. TCP is unaffected.
-- A UDP port tracks at most 256 clients; a new client beyond that ends the least recently active one. Datagrams beyond 16 MiB waiting for the VM are dropped.
-- The guest root filesystem lives in RAM (about 163 MB). A read-only erofs root would avoid that.
-- The memory balloon device is attached, but nothing reclaims memory from the guest yet.
-- If the guest doesn't power off in time, `stop` hard-stops the VM: after 25 s, or after 2 s if no agent is connected. Recent writes that ext4 hasn't flushed can be lost.
-- Only your home directory is shared with the VM (see [Troubleshooting](#troubleshooting)).
-- Whatever can write the state directory can change the VM as root on the next boot: `daemon.json` (runtimes, insecure registries), `ca-certificates/` and `certs.d/` apply with dockerd's privileges. That is no more than running a privileged container, but it persists across restarts.
-- The agent's control port trusts whoever connects from inside the VM. Ordinary containers can't open vsock sockets (Docker's default seccomp profile blocks them), but a privileged container, or one without seccomp, could pose as the agent and report fake ports. Such a container controls the VM anyway.
-- `dockma shell` depends on the guest agent. If the agent itself is dead, there is no way in short of `dockma restart`.
-- Containers get no GPU acceleration. Before macOS 27, Virtualization.framework gives Linux guests only a 2D framebuffer. macOS 27's custom Virtio devices could carry a virtio-gpu device with Venus (Vulkan only, never CUDA or Metal), but dockma doesn't implement one. For GPU work, use a krunkit-based engine (Podman, Lima) or run inference natively on the host.
-- Not yet tested:
-  - `--autostart`;
-  - `delete`;
-  - home paths that contain spaces.
+- **Sharing:** only your home directory is shared with the VM.
+- **Ports:**
+  - SCTP isn't forwarded.
+  - Each UDP client gets its own tunnel, which ends 90 s after its last packet, as with docker-proxy.
+  - With `--port-bind-address 0.0.0.0` on a Mac with several addresses, a UDP reply can leave from a different address than the client used.
+  - A UDP port tracks at most 256 clients (a new one ends the least recently active), and drops datagrams beyond 16 MiB queued for the VM.
+- **Memory:**
+  - The guest root filesystem lives in RAM (about 163 MB).
+  - The balloon device is attached, but nothing reclaims guest memory yet.
+- **Shutdown:** a stop that runs out of time hard-stops the VM (after 25 s, or 2 s without an agent), and unflushed ext4 writes can be lost.
+- **Trust:**
+  - Whatever can write the state directory controls the VM as root on the next boot, through `daemon.json`, `ca-certificates/` and `certs.d/`.
+  - A privileged container, or one without seccomp, can open vsock and pose as the agent. Such a container controls the VM anyway.
+- **Shell:** `dockma shell` needs a live agent. If the agent is dead, only `dockma restart` gets you in.
+- **GPU:** containers get no GPU acceleration. macOS 27 could carry a virtio-gpu device with Venus (Vulkan only), but dockma doesn't implement one. For GPU work, use a krunkit-based engine or run natively.
+- **Untested:** `--autostart`, `delete`, and home paths containing spaces.

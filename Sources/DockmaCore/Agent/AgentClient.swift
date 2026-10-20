@@ -6,7 +6,7 @@ import Foundation
 @MainActor
 public final class AgentClient {
     private var fd: Int32 = -1
-    private var stopped = false
+    private var isStopped = false
 
     public private(set) var version: String?
     public private(set) var kernel: String?
@@ -24,7 +24,7 @@ public final class AgentClient {
 
     /// Closes the connection and refuses later ones.
     public func stop() {
-        stopped = true
+        isStopped = true
         if fd >= 0 {
             shutdown(fd, SHUT_RDWR)
         }
@@ -40,7 +40,7 @@ public final class AgentClient {
     /// Takes a connection the agent opened. It replaces an existing one,
     /// which belongs to an agent that has since restarted.
     public func accept(_ newFD: Int32) {
-        guard !stopped else {
+        guard !isStopped else {
             close(newFD)
             return
         }

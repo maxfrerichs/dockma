@@ -58,9 +58,8 @@ public final class PortForwarder {
 
     /// One line per port that didn't bind on every address, sorted.
     public var failureWarnings: [String] {
-        failures.keys.sorted().map { key in
-            let failure = failures[key]!
-            return "port \(key) is \(failure.isPartial ? "only partly forwarded" : "not forwarded"): \(failure.error)"
+        failures.sorted { $0.key < $1.key }.map { key, failure in
+            "port \(key) is \(failure.isPartial ? "only partly forwarded" : "not forwarded"): \(failure.error)"
         }
     }
 
