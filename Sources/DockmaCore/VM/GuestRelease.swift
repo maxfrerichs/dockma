@@ -85,7 +85,7 @@ public enum GuestRelease {
         guard installed == GuestImage.protocolVersion else {
             throw DockmaError("dockma-linux \(version) speaks guest protocol \(installed), but this dockma needs \(GuestImage.protocolVersion)")
         }
-        try swap(guest, into: paths.guest, parkingIn: staging)
+        try exchange(guest, into: paths.guest, parkingIn: staging)
     }
 
     /// Deletes the staging directories directly inside `root`.
@@ -144,7 +144,7 @@ public enum GuestRelease {
 
     /// Moves `new` to `target`, exchanging the two atomically if `target`
     /// exists. The previous contents end up in `parking`.
-    private static func swap(_ new: URL, into target: URL, parkingIn parking: URL) throws {
+    private static func exchange(_ new: URL, into target: URL, parkingIn parking: URL) throws {
         guard FileManager.default.fileExists(atPath: target.path) else {
             guard rename(new.path, target.path) == 0 else { throw DockmaError.posix("rename \(new.path)") }
             return

@@ -11,7 +11,7 @@ public enum KernelCmdline {
     /// in place: the daemon keeps running and the agent reconnects.
     /// `rcupdate.rcu_expedited=1` shortens the RCU grace periods that
     /// container setup and teardown wait on, about 50 ms per `docker run`.
-    public static func build(home: String, state: String) -> String {
+    public static func commandLine(home: String, state: String) -> String {
         [
             "console=hvc0",
             "rdinit=/init",
@@ -25,9 +25,9 @@ public enum KernelCmdline {
 
     /// Percent-encodes everything except `[A-Za-z0-9/._-]` so the value has no
     /// spaces or quotes; rcS decodes `%XX` with printf.
-    static func percentEncoded(_ s: String) -> String {
+    static func percentEncoded(_ value: String) -> String {
         var out = ""
-        for byte in s.utf8 {
+        for byte in value.utf8 {
             switch byte {
             case UInt8(ascii: "a")...UInt8(ascii: "z"), UInt8(ascii: "A")...UInt8(ascii: "Z"),
                  UInt8(ascii: "0")...UInt8(ascii: "9"), UInt8(ascii: "/"), UInt8(ascii: "."),

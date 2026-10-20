@@ -83,7 +83,7 @@ public final class SocketListener: @unchecked Sendable {
             throw error
         }
         chmod(path, 0o600)
-        return try finish(fd: fd, description: path, unixPath: path, acceptsOnlyLoopback: false, handler: handler)
+        return try makeListening(fd: fd, description: path, unixPath: path, acceptsOnlyLoopback: false, handler: handler)
     }
 
     /// Listens on TCP `address:port`. With `acceptsOnlyLoopback`, connections
@@ -92,13 +92,13 @@ public final class SocketListener: @unchecked Sendable {
     public static func tcp(address: IPAddress, port: UInt16, acceptsOnlyLoopback: Bool = false,
                            handler: @escaping @Sendable (Int32) -> Void) throws -> SocketListener {
         let (fd, description) = try InetSocket.makeBound(type: SOCK_STREAM, address: address, port: port)
-        return try finish(fd: fd, description: acceptsOnlyLoopback ? "\(description) (loopback only)" : description,
-                          unixPath: nil, acceptsOnlyLoopback: acceptsOnlyLoopback, handler: handler)
+        return try makeListening(fd: fd, description: acceptsOnlyLoopback ? "\(description) (loopback only)" : description,
+                                 unixPath: nil, acceptsOnlyLoopback: acceptsOnlyLoopback, handler: handler)
     }
 
     /// Starts listening on the bound `fd` and wraps it in a listener.
-    private static func finish(fd: Int32, description: String, unixPath: String?, acceptsOnlyLoopback: Bool,
-                               handler: @escaping @Sendable (Int32) -> Void) throws -> SocketListener {
+    private static func makeListening(fd: Int32, description: String, unixPath: String?, acceptsOnlyLoopback: Bool,
+                                      handler: @escaping @Sendable (Int32) -> Void) throws -> SocketListener {
         guard listen(fd, 128) == 0 else {
             let error = DockmaError.posix("listen \(description)")
             close(fd)
@@ -192,11 +192,11 @@ final class LoopbackFilter: @unchecked Sendable {
 /// and dispatch never runs those concurrently.
 private final class SpareDescriptor: @unchecked Sendable {
     private var fd = open("/dev/null", O_RDONLY | O_CLOEXEC)
-    private var shedding = false
+    private var isShedding = false
 
     func shed(listener: Int32, description: String) {
-        if !shedding {
-            shedding = true
+        if !isShedding {
+            isShedding = true
             Log.info("out of file descriptors; dropping new connections on \(description)")
         }
         if fd >= 0 {
@@ -211,7 +211,7 @@ private final class SpareDescriptor: @unchecked Sendable {
 
     /// Records a successful accept, so the next shortage is logged again.
     func didAccept() {
-        shedding = false
+        isShedding = false
     }
 
     func close() {

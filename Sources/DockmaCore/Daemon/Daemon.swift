@@ -25,7 +25,7 @@ public final class Daemon {
     private var readyWaiters: [ControlReply] = []
     private var signalSources: [DispatchSourceSignal] = []
     private var state: DaemonStatus.State = .starting
-    private var stopRequested = false
+    private var isStopRequested = false
     /// The hard stop that ends the shutdown grace period.
     private var forceStopTask: Task<Void, Never>?
     /// When `requestStop()` ran; the full grace period counts from here.
@@ -123,12 +123,12 @@ public final class Daemon {
         self.ports = ports
         let agent = AgentClient()
         agent.onPorts = { [weak self] set in
-            guard let self, !self.stopRequested else { return }
+            guard let self, !self.isStopRequested else { return }
             ports.update(set)
         }
         agent.onConnect = { [weak self] in
             guard let self else { return }
-            if self.stopRequested {
+            if self.isStopRequested {
                 // A stop during boot can come before the agent runs; it can
                 // still power the guest off cleanly.
                 if self.agent?.send(.shutdown) == true, let stopRequestedAt = self.stopRequestedAt {
@@ -178,7 +178,7 @@ public final class Daemon {
         Task { [weak self] in
             while true {
                 try? await Task.sleep(for: Self.timeSyncInterval)
-                guard let self, !self.stopRequested else { return }
+                guard let self, !self.isStopRequested else { return }
                 self.agent?.send(.setTime(Date()))
             }
         }
@@ -188,7 +188,7 @@ public final class Daemon {
         Task { [weak self] in
             while true {
                 try? await Task.sleep(for: Self.portRetryInterval)
-                guard let self, !self.stopRequested else { return }
+                guard let self, !self.isStopRequested else { return }
                 if self.ports?.hasFailures == true { self.ports?.retryFailed() }
             }
         }
@@ -208,7 +208,7 @@ public final class Daemon {
             }
             reply.send(Data("{}".utf8))
         case .wait:
-            if stopRequested {
+            if isStopRequested {
                 reply.close()
             } else if agent?.isDockerReady == true {
                 sendStatus(to: reply)
@@ -239,7 +239,7 @@ public final class Daemon {
 
     /// Replies to every pending `wait` request with the current status.
     private func answerReadyWaiters() {
-        guard !stopRequested else { return }
+        guard !isStopRequested else { return }
         let waiters = readyWaiters
         readyWaiters.removeAll()
         waiters.forEach(sendStatus(to:))
@@ -254,8 +254,8 @@ public final class Daemon {
     /// Graceful shutdown: ask the agent to power off (fall back to the virtual
     /// power button), then hard-stop after the grace period.
     public func requestStop() {
-        guard !stopRequested else { return }
-        stopRequested = true
+        guard !isStopRequested else { return }
+        isStopRequested = true
         let now = ContinuousClock.now
         stopRequestedAt = now
         state = .stopping
@@ -310,12 +310,12 @@ public final class Daemon {
         cleanUp()
         if let error {
             Log.info("VM stopped with error: \(error)")
-        } else if stopRequested {
+        } else if isStopRequested {
             Log.info("VM stopped")
         } else {
             Log.info("guest powered off unexpectedly")
         }
-        exit(Self.exitCode(stopRequested: stopRequested))
+        exit(Self.exitCode(stopRequested: isStopRequested))
     }
 
     /// The exit code after the VM stopped, which decides whether launchd

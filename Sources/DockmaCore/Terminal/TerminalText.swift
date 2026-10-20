@@ -5,7 +5,7 @@ public enum TerminalText {
     /// `line` without ANSI escape sequences and control characters; a tab
     /// becomes a space. Guest output must not move the cursor of a panel
     /// that is redrawn by counting lines.
-    public static func sanitize(_ line: String) -> String {
+    public static func sanitized(_ line: String) -> String {
         var result = String.UnicodeScalarView()
         var scalars = line.unicodeScalars.makeIterator()
         while let scalar = scalars.next() {
@@ -40,7 +40,7 @@ public enum TerminalText {
     /// free: a line that fills or wraps the row would break the cursor-up
     /// arithmetic of a redraw. Counts Characters as one column each, which
     /// is wrong for East Asian wide characters; guest logs are ASCII.
-    public static func truncate(_ line: String, toWidth width: Int) -> String {
+    public static func truncated(_ line: String, toWidth width: Int) -> String {
         let limit = width - 1
         guard limit > 0 else { return "" }
         guard line.count > limit else { return line }

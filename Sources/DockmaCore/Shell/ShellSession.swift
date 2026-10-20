@@ -5,7 +5,7 @@ import Foundation
 /// command in the VM.
 public final class ShellSession: @unchecked Sendable {
     private let fd: Int32
-    private let tty: Bool
+    private let usesTTY: Bool
     private let writeLock = NSLock()
     private var signalSources: [DispatchSourceSignal] = []
     private var savedTerminal: termios?
@@ -20,7 +20,7 @@ public final class ShellSession: @unchecked Sendable {
 
     private init(fd: Int32, tty: Bool) {
         self.fd = fd
-        self.tty = tty
+        self.usesTTY = tty
     }
 
     /// Runs `argv` (a login shell when empty) and returns its exit code.
@@ -46,9 +46,9 @@ public final class ShellSession: @unchecked Sendable {
     private func run(argv: [String]) throws -> Int32 {
         let (rows, cols) = Terminal.size()
         let term = ProcessInfo.processInfo.environment["TERM"] ?? "xterm-256color"
-        send(.start(ShellStart(argv: argv, tty: tty, rows: rows, cols: cols, term: term)))
+        send(.start(ShellStart(argv: argv, tty: usesTTY, rows: rows, cols: cols, term: term)))
 
-        if tty {
+        if usesTTY {
             enterRawMode()
             handleSignal(SIGWINCH) { session in
                 let (rows, cols) = Terminal.size()

@@ -35,15 +35,15 @@ public struct Config: Codable, Equatable, Sendable {
     }
 
     public init(from decoder: any Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        let d = Config()
-        cpus = try c.decodeIfPresent(Int.self, forKey: .cpus) ?? d.cpus
-        memoryMiB = try c.decodeIfPresent(UInt64.self, forKey: .memoryMiB) ?? d.memoryMiB
-        diskGiB = try c.decodeIfPresent(UInt64.self, forKey: .diskGiB) ?? d.diskGiB
-        portBindAddress = try c.decodeIfPresent(String.self, forKey: .portBindAddress) ?? d.portBindAddress
-        rosetta = try c.decodeIfPresent(Bool.self, forKey: .rosetta) ?? d.rosetta
-        autostart = try c.decodeIfPresent(Bool.self, forKey: .autostart) ?? d.autostart
-        macAddress = try c.decodeIfPresent(String.self, forKey: .macAddress)
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = Config()
+        cpus = try container.decodeIfPresent(Int.self, forKey: .cpus) ?? defaults.cpus
+        memoryMiB = try container.decodeIfPresent(UInt64.self, forKey: .memoryMiB) ?? defaults.memoryMiB
+        diskGiB = try container.decodeIfPresent(UInt64.self, forKey: .diskGiB) ?? defaults.diskGiB
+        portBindAddress = try container.decodeIfPresent(String.self, forKey: .portBindAddress) ?? defaults.portBindAddress
+        rosetta = try container.decodeIfPresent(Bool.self, forKey: .rosetta) ?? defaults.rosetta
+        autostart = try container.decodeIfPresent(Bool.self, forKey: .autostart) ?? defaults.autostart
+        macAddress = try container.decodeIfPresent(String.self, forKey: .macAddress)
     }
 
     /// Throws for a value the VM can't be built with. Messages name both the
@@ -83,7 +83,7 @@ public struct Config: Codable, Equatable, Sendable {
         do {
             return try JSONDecoder().decode(Config.self, from: Data(contentsOf: url))
         } catch let error as DecodingError {
-            throw DockmaError("\(url.path) is invalid: \(Self.describe(error)). Fix it, or delete it to go back to the defaults.")
+            throw DockmaError("\(url.path) is invalid: \(Self.description(of: error)). Fix it, or delete it to go back to the defaults.")
         } catch {
             throw DockmaError("cannot read \(url.path): \(error.localizedDescription)")
         }
@@ -91,7 +91,7 @@ public struct Config: Codable, Equatable, Sendable {
 
     /// A one-line description of a decoding error: the key path and what
     /// was wrong there.
-    static func describe(_ error: DecodingError) -> String {
+    static func description(of error: DecodingError) -> String {
         let context: DecodingError.Context
         switch error {
         case .typeMismatch(_, let c), .valueNotFound(_, let c), .keyNotFound(_, let c), .dataCorrupted(let c): context = c

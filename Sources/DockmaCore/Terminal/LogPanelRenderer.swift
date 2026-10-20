@@ -84,7 +84,7 @@ public final class LogPanelRenderer: @unchecked Sendable {
     private func drawFrame(tick: Int) {
         for index in tails.indices {
             for line in splitters[index].lines(appending: tails[index].readAppended()) {
-                let text = TerminalText.sanitize(TerminalText.withoutTimestamp(line))
+                let text = TerminalText.sanitized(TerminalText.withoutTimestamp(line))
                 if !text.trimmingCharacters(in: .whitespaces).isEmpty { panel.append(text) }
             }
         }

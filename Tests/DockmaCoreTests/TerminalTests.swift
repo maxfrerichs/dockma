@@ -25,16 +25,16 @@ import Testing
 }
 
 @Test func sanitizeStripsEscapesAndControls() {
-    #expect(TerminalText.sanitize("\u{1B}[1;31mred\u{1B}[0m text") == "red text")
-    #expect(TerminalText.sanitize("\u{1B}]0;title\u{07}a\tb\u{08}") == "a b")
-    #expect(TerminalText.sanitize("\u{1B}]8;;url\u{1B}\\link") == "link")
-    #expect(TerminalText.sanitize("plain µs") == "plain µs")
+    #expect(TerminalText.sanitized("\u{1B}[1;31mred\u{1B}[0m text") == "red text")
+    #expect(TerminalText.sanitized("\u{1B}]0;title\u{07}a\tb\u{08}") == "a b")
+    #expect(TerminalText.sanitized("\u{1B}]8;;url\u{1B}\\link") == "link")
+    #expect(TerminalText.sanitized("plain µs") == "plain µs")
 }
 
 @Test func truncateLeavesTheLastColumnFree() {
-    #expect(TerminalText.truncate("12345", toWidth: 6) == "12345")
-    #expect(TerminalText.truncate("123456", toWidth: 6) == "1234…")
-    #expect(TerminalText.truncate("123456", toWidth: 1) == "")
+    #expect(TerminalText.truncated("12345", toWidth: 6) == "12345")
+    #expect(TerminalText.truncated("123456", toWidth: 6) == "1234…")
+    #expect(TerminalText.truncated("123456", toWidth: 1) == "")
 }
 
 @Test func timestampIsStrippedFromDaemonLines() {
