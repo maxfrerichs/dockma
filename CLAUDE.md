@@ -69,9 +69,10 @@ make install-guest        # copy guest artifacts to ~/.dockma/guest/
 dockma install            # or download the released guest of DockmaVersion.current (DOCKMA_RELEASE_URL overrides the source)
 make test                 # swift test (Swift Testing)
 make e2e                  # build + scripts/e2e.sh against its own VM in ~/.dockma-e2e (E2E_HOME); the user's VM keeps running
-scripts/bench.sh          # boot time with a phase breakdown, plus network throughput (restarts the user's VM RUNS times; RUNS=0 skips boot, NETWORK=0 skips network)
-DISK=1 RUNS=0 NETWORK=0 scripts/bench.sh                                  # disk: fio and per-step build overhead on LAYER_BASE (steps parsed by scripts/bench-build-steps.py)
-ENGINE_SOCKET=$HOME/.lima/default/sock/docker.sock DISK=1 scripts/bench.sh   # same network/disk phases against another engine, as a baseline
+scripts/bench.sh          # boot time with a phase breakdown (restarts the user's VM RUNS times; RUNS=0 skips boot)
+DISK=1 RUNS=0 scripts/bench.sh   # per-step build overhead on LAYER_BASE with guest I/O pressure (steps parsed by scripts/bench-build-steps.py)
+scripts/bench-compare.py --prepare && scripts/bench-compare.py   # dockma vs Lima vs OrbStack, method in docs/benchmarks.md; stops daily engines, restores them at exit
+scripts/bench-report.py <results dir>                            # median/IQR tables from raw.jsonl
 swift test --filter DockmaCoreTests.planIsEmptyWhenNothingChanged   # one test
 ```
 

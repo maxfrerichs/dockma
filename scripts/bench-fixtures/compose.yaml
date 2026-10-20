@@ -1,0 +1,15 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: bench
+    healthcheck:
+      test: pg_isready -U postgres
+      interval: 1s
+      retries: 60
+  cache:
+    image: redis:8-alpine
+    healthcheck:
+      test: redis-cli ping
+      interval: 1s
+      retries: 60
