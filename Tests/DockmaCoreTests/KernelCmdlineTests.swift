@@ -6,6 +6,7 @@ import Testing
     #expect(cmdline.contains("console=hvc0"))
     #expect(cmdline.contains("rdinit=/init"))
     #expect(cmdline.contains("panic=5"))
+    #expect(cmdline.contains("rcupdate.rcu_expedited=1"))
     #expect(cmdline.contains("dockma.home=/Users/max "))
     #expect(cmdline.hasSuffix("dockma.state=/Users/max/.dockma"))
 }
