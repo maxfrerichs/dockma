@@ -46,8 +46,10 @@ jobs:
       # A plain `docker buildx` step only reaches the gha cache with the
       # runtime token exposed.
       - uses: crazy-max/ghaction-github-runtime@04d248b84655b509d8c44dc1d6f990c879747487 # v4.0.0
+      # Some runs get a read-only cache token ("Cache mode: read"); a failed
+      # cache export must not fail the build.
       - name: Build
-        run: make guest BUILDX_FLAGS="--cache-from type=gha,scope=guest --cache-to type=gha,scope=guest,mode=max"
+        run: make guest BUILDX_FLAGS="--cache-from type=gha,scope=guest --cache-to type=gha,scope=guest,mode=max,ignore-error=true"
       - name: Package
         id: package
         run: |
