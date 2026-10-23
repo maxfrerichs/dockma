@@ -85,6 +85,7 @@ public enum GuestRelease {
         guard installed == GuestImage.protocolVersion else {
             throw DockmaError("dockma-linux \(version) speaks guest protocol \(installed), but this dockma needs \(GuestImage.protocolVersion)")
         }
+        try Data(GuestImage.releaseStamp(version: version).utf8).write(to: guest.appendingPathComponent("origin"))
         try exchange(guest, into: paths.guest, parkingIn: staging)
     }
 

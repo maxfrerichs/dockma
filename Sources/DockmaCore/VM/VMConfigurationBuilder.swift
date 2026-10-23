@@ -27,6 +27,40 @@ public enum GuestImage {
         }
     }
 
+    /// Where an installed guest image came from.
+    public enum Origin: Equatable, Sendable {
+        /// Downloaded by `dockma install` from the release of this version.
+        case release(String)
+        /// Built from source and installed by `make install-guest`.
+        case local
+    }
+
+    /// The origin stamped in the guest directory; nil when the stamp is
+    /// missing (a guest installed before 0.6) or unreadable.
+    public static func origin(paths: Paths) -> Origin? {
+        guard let data = FileManager.default.contents(atPath: paths.guestOrigin.path) else { return nil }
+        let words = String(decoding: data, as: UTF8.self).split(whereSeparator: \.isWhitespace)
+        switch (words.first, words.count) {
+        case ("local", 1): return .local
+        case ("release", 2): return .release(String(words[1]))
+        default: return nil
+        }
+    }
+
+    /// Whether `start` should install the release guest of `version`: when
+    /// no guest is installed, or when a guest from a release is from another
+    /// version or speaks another protocol. A local or unstamped guest is
+    /// never replaced.
+    public static func needsReleaseInstall(paths: Paths, version: String) -> Bool {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: paths.kernel.path), fm.fileExists(atPath: paths.initrd.path) else { return true }
+        guard case .release(let installed) = origin(paths: paths) else { return false }
+        return installed != version || installedProtocol(at: paths.guestProtocol) != protocolVersion
+    }
+
+    /// The text of the origin stamp for a guest from the release of `version`.
+    static func releaseStamp(version: String) -> String { "release \(version)\n" }
+
     /// The protocol number in the image's protocol file: 1 when the file is
     /// missing, 0 when it doesn't hold a number.
     static func installedProtocol(at url: URL) -> Int {

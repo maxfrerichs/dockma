@@ -11,7 +11,16 @@ public struct ControlRequest: Codable, Sendable {
 
 /// Daemon → CLI status reply.
 public struct DaemonStatus: Codable, Equatable, Sendable {
-    public enum State: String, Codable, Sendable { case starting, running, stopping }
+    public enum State: String, Codable, Sendable {
+        case starting, running, stopping
+        /// A state from a newer daemon that this CLI doesn't know.
+        case unknown
+
+        /// Decodes a state, mapping one this version doesn't know to `unknown`.
+        public init(from decoder: any Decoder) throws {
+            self = State(rawValue: try decoder.singleValueContainer().decode(String.self)) ?? .unknown
+        }
+    }
 
     public var state: State
     public var pid: Int32
@@ -38,10 +47,10 @@ public struct DaemonStatus: Codable, Equatable, Sendable {
 
 /// Talks to a running daemon. Every call fails fast when none is listening.
 public enum ControlClient {
-    /// Whether a daemon answers a status request. A socket round trip with
-    /// a 5 s timeout.
+    /// Whether a daemon answers a status request, even with a reply this
+    /// version can't decode. A socket round trip with a 5 s timeout.
     public static func isDaemonAnswering(paths: Paths) -> Bool {
-        (try? status(paths: paths)) != nil
+        (try? roundTrip(paths: paths, request: ControlRequest(command: .status))) != nil
     }
 
     public static func status(paths: Paths) throws -> DaemonStatus {

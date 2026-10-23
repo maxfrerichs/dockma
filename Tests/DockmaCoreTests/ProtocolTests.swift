@@ -155,3 +155,9 @@ import Testing
     let decoded = try JSONDecoder().decode(DaemonStatus.self, from: JSONEncoder().encode(withUDP))
     #expect(decoded.forwardedPortKeys.map(\.description) == ["53/udp", "8080", "9000/udp"])
 }
+
+/// A newer daemon may report a state, or keys, this version doesn't know.
+@Test func decodesStatusFromANewerDaemon() throws {
+    let json = #"{"state":"paused","pid":1,"startedAt":0,"cpus":2,"memoryMiB":1024,"agentConnected":true,"forwardedPorts":[],"warnings":[],"shares":["/tmp"]}"#
+    #expect(try JSONDecoder().decode(DaemonStatus.self, from: Data(json.utf8)).state == .unknown)
+}

@@ -11,10 +11,12 @@ struct Dockma: ParsableCommand {
         subcommands: [Start.self, Install.self, Stop.self, Restart.self, Status.self, ShellCommand.self, Logs.self, ConfigCommand.self, Delete.self, DaemonCommand.self])
 }
 
-/// Absolute path of this binary, which launchd runs as the daemon.
+/// Absolute path of this binary, which launchd runs as the daemon. A
+/// symlink it was run through is kept: package managers point a stable link
+/// (`/opt/homebrew/bin/dockma`) at a versioned directory an upgrade deletes.
 func currentExecutable() -> String {
     let url = Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
-    return url.resolvingSymlinksInPath().path
+    return url.standardizedFileURL.path
 }
 
 /// Moves this `DOCKMA_HOME` off a job an older dockma started under the
@@ -63,9 +65,15 @@ struct Start: ParsableCommand {
         try paths.createDirectories()
         let config = try Config.load(from: paths.config)
         try config.validate()
+        let style = TerminalStyle.standardOutput()
+        // A running VM keeps the guest it booted; `start` leaves it alone.
+        if ProcessInfo.processInfo.environment["DOCKMA_NO_AUTO_INSTALL"] != "1",
+           GuestImage.needsReleaseInstall(paths: paths, version: DockmaVersion.current),
+           !ControlClient.isDaemonAnswering(paths: paths) {
+            try installReleaseGuest(paths: paths, style: style)
+        }
         try GuestImage.validate(paths: paths)
 
-        let style = TerminalStyle.standardOutput()
         let agent = LaunchAgent(paths: paths, executable: currentExecutable())
         guard let logs = try loadJob(agent: agent, paths: paths, config: config, style: style) else { return }
 
@@ -185,6 +193,26 @@ struct Start: ParsableCommand {
     }
 }
 
+/// Downloads, verifies and installs the release guest of this dockma
+/// version, printing what it does.
+func installReleaseGuest(paths: Paths, style: TerminalStyle) throws {
+    let version = DockmaVersion.current
+    let baseURL = GuestRelease.baseURL(version: version, environment: ProcessInfo.processInfo.environment)
+    print("Downloading dockma-linux \(version)…")
+    // Before curl's progress bar or an error reaches stderr.
+    fflush(stdout)
+    do {
+        try GuestRelease.install(version: version, from: baseURL, paths: paths,
+                                 showsProgress: isatty(STDERR_FILENO) == 1)
+    } catch let error as DockmaError {
+        throw DockmaError("""
+            \(error.description)
+            If this dockma was built from source, install its guest with `make guest install-guest` instead.
+            """)
+    }
+    print(style.success("Installed dockma-linux \(version)") + " in \(paths.guest.path)")
+}
+
 struct Install: ParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Download the Linux guest (dockma-linux) of this version into ~/.dockma/guest.",
@@ -197,22 +225,8 @@ struct Install: ParsableCommand {
     /// Downloads, verifies and installs the guest of this dockma version.
     func run() throws {
         let paths = Paths.default()
-        let version = DockmaVersion.current
-        let baseURL = GuestRelease.baseURL(version: version, environment: ProcessInfo.processInfo.environment)
         let style = TerminalStyle.standardOutput()
-        print("Downloading dockma-linux \(version)…")
-        // Before curl's progress bar or an error reaches stderr.
-        fflush(stdout)
-        do {
-            try GuestRelease.install(version: version, from: baseURL, paths: paths,
-                                     showsProgress: isatty(STDERR_FILENO) == 1)
-        } catch let error as DockmaError {
-            throw DockmaError("""
-                \(error.description)
-                If this dockma was built from source, install its guest with `make guest install-guest` instead.
-                """)
-        }
-        print(style.success("Installed dockma-linux \(version)") + " in \(paths.guest.path)")
+        try installReleaseGuest(paths: paths, style: style)
         if ControlClient.isDaemonAnswering(paths: paths) {
             print("  The running VM keeps its current guest until `dockma restart`.")
         } else {
@@ -275,6 +289,15 @@ struct Status: ParsableCommand {
         let paths = Paths.default()
         let style = TerminalStyle.standardOutput()
         guard let status = try? ControlClient.status(paths: paths) else {
+            if ControlClient.isDaemonAnswering(paths: paths) {
+                if json {
+                    print(#"{"state":"unknown"}"#)
+                } else {
+                    print("dockma is running, but its daemon is another version whose status this CLI can't read")
+                    print(style.dim("Run `dockma restart` to switch to this CLI's version."))
+                }
+                return
+            }
             if json {
                 print(#"{"state":"stopped"}"#)
             } else {
@@ -305,6 +328,9 @@ struct Status: ParsableCommand {
         print("daemon:   pid \(status.pid) \(style.dim(status.version ?? ""))")
         if status.version != DockmaVersion.current {
             print("warning:  \(style.yellow("the daemon runs \(status.version.map { "dockma \($0)" } ?? "an older dockma"), this CLI is \(DockmaVersion.current); run `dockma restart` to switch"))")
+        }
+        if case .release(let version) = GuestImage.origin(paths: paths), version != DockmaVersion.current {
+            print("warning:  \(style.yellow("the guest is from dockma \(version), this CLI is \(DockmaVersion.current); run `dockma install`, then `dockma restart`"))")
         }
         for warning in status.warnings { print("warning:  \(style.yellow(warning))") }
         if let hint = DockerContext.hint(paths: paths) { print(hint) }
@@ -393,7 +419,8 @@ struct LogFollower {
             while true {
                 let data = tail.readAppended()
                 if data.isEmpty { break }
-                FileHandle.standardOutput.write(data)
+                // The reader went away, as with `| head`.
+                guard (try? FileHandle.standardOutput.write(contentsOf: data)) != nil else { Foundation.exit(0) }
             }
         }
     }
@@ -443,6 +470,14 @@ struct ConfigCommand: ParsableCommand {
         if config.cpus != before.cpus || config.memoryMiB != before.memoryMiB {
             for warning in config.resourceWarnings(hostCPUs: ProcessInfo.processInfo.activeProcessorCount,
                                                    hostMemoryBytes: ProcessInfo.processInfo.physicalMemory) {
+                Terminal.printError(errorStyle.yellow("warning: ") + warning)
+            }
+        }
+        if config.diskGiB != before.diskGiB,
+           let free = try? paths.root.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage {
+            var info = stat()
+            let allocated = stat(paths.dataDisk.path, &info) == 0 ? UInt64(info.st_blocks) * 512 : 0
+            if let warning = config.diskWarning(allocatedBytes: allocated, hostFreeBytes: UInt64(max(0, free))) {
                 Terminal.printError(errorStyle.yellow("warning: ") + warning)
             }
         }

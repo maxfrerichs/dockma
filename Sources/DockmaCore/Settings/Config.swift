@@ -14,6 +14,11 @@ public struct Config: Codable, Equatable, Sendable {
     /// Stable MAC so the NAT DHCP server hands out the same address.
     public var macAddress: String?
 
+    /// The config.json keys; frozen, since they are the file's format.
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case cpus, memoryMiB, diskGiB, portBindAddress, rosetta, autostart, macAddress
+    }
+
     public static let defaultCPUs = max(2, ProcessInfo.processInfo.activeProcessorCount / 2)
 
     public init(
@@ -76,6 +81,15 @@ public struct Config: Codable, Equatable, Sendable {
         return warnings
     }
 
+    /// A warning when the data disk may grow past the Mac's free space. The
+    /// image is sparse and takes space only as the guest writes, so the
+    /// space it may still claim is its size minus what it holds already.
+    public func diskWarning(allocatedBytes: UInt64, hostFreeBytes: UInt64) -> String? {
+        let claimable = (diskGiB << 30) - min(allocatedBytes, diskGiB << 30)
+        guard claimable > hostFreeBytes else { return nil }
+        return "--disk \(diskGiB) GiB can grow past the \(hostFreeBytes >> 30) GiB free on the Mac's volume; the VM fails writes once that is full"
+    }
+
     /// The settings in `url`, or the defaults if it doesn't exist. A file
     /// that doesn't parse throws an error naming the offending key.
     public static func load(from url: URL) throws -> Config {
@@ -107,10 +121,15 @@ public struct Config: Codable, Equatable, Sendable {
         return path.isEmpty ? reason : "\(path): \(reason)"
     }
 
+    /// Writes the settings to `url`, keeping keys already there that this
+    /// version doesn't know, so an older binary can't drop a newer setting.
     public func save(to url: URL) throws {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(self).write(to: url, options: .atomic)
+        var object = (try? JSONSerialization.jsonObject(with: Data(contentsOf: url))) as? [String: Any] ?? [:]
+        let known = try JSONSerialization.jsonObject(with: JSONEncoder().encode(self)) as! [String: Any]
+        // An optional set to nil is omitted by the encoder; drop its stale value too.
+        for key in CodingKeys.allCases.map(\.stringValue) { object[key] = known[key] }
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: url, options: .atomic)
         // The atomic write creates a new file with the default mode.
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }

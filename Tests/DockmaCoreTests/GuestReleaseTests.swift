@@ -66,6 +66,9 @@ private let validGuest: [String: String?] = [
     "dockma-kernel": "kernel", "dockma-initrd.img": "initramfs", "guest-protocol": "\(GuestImage.protocolVersion)\n",
 ]
 
+/// `validGuest` as installed: its files plus the origin stamp.
+private let installedValidGuest = validGuest.compactMapValues { $0 }.merging(["origin": "release \(version)\n"]) { a, _ in a }
+
 @Test func checksumParsesTextAndBinaryMode() {
     let sums = """
         aaaa  dockma-linux-1.0.0-arm64.tar.gz.sig
@@ -115,7 +118,7 @@ private let validGuest: [String: String?] = [
     #expect(error?.description.contains("another `dockma install` is running") == true)
     close(fd)
     try fixture.install()
-    #expect(try fixture.installedGuest() == validGuest.compactMapValues { $0 })
+    #expect(try fixture.installedGuest() == installedValidGuest)
 }
 
 @Test func installsIntoAnEmptyStateDirectory() throws {
@@ -123,9 +126,10 @@ private let validGuest: [String: String?] = [
     defer { try? FileManager.default.removeItem(at: fixture.root) }
     try fixture.publish(validGuest)
     try fixture.install()
-    #expect(try fixture.installedGuest() == validGuest.compactMapValues { $0 })
+    #expect(try fixture.installedGuest() == installedValidGuest)
     #expect(try !fixture.hasStaging())
     try GuestImage.validate(paths: fixture.paths)
+    #expect(GuestImage.origin(paths: fixture.paths) == .release(version))
 }
 
 @Test func replacesAnInstalledGuest() throws {
@@ -135,7 +139,7 @@ private let validGuest: [String: String?] = [
     try fixture.install()
     try fixture.publish(validGuest)
     try fixture.install()
-    #expect(try fixture.installedGuest() == validGuest.compactMapValues { $0 })
+    #expect(try fixture.installedGuest() == installedValidGuest)
     #expect(try !fixture.hasStaging())
 }
 
@@ -162,7 +166,7 @@ private let validGuest: [String: String?] = [
         try publish(fixture)
         let error = #expect(throws: DockmaError.self, "\(name)") { try fixture.install() }
         #expect(error?.description.contains(message) == true, "\(name): \(error?.description ?? "")")
-        #expect(try fixture.installedGuest() == installed, "\(name)")
+        #expect(try fixture.installedGuest() == installed.merging(["origin": "release \(version)\n"]) { a, _ in a }, "\(name)")
         #expect(try !fixture.hasStaging(), "\(name)")
     }
 }

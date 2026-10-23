@@ -12,6 +12,8 @@ DOCKMA_HOME=${DOCKMA_HOME:-$HOME/.dockma-e2e}
 export DOCKMA_HOME
 DOCKMA_DIR=$DOCKMA_HOME
 export DOCKER_HOST="unix://$DOCKMA_DIR/docker.sock"
+# Test the guest that is installed, never one start downloads.
+export DOCKMA_NO_AUTO_INSTALL=1
 PORT=18080
 UDP_PORT=18053
 HELD_PORT=18081

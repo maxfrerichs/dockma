@@ -69,7 +69,8 @@ docker context use dockma
 
 - The binary is ad-hoc signed, not notarized. macOS kills a quarantined copy at launch, hence the `xattr` step for browser downloads.
 - `gh attestation verify <file> --repo <owner>/dockma` checks that a tarball came from this repository's release workflow.
-- `dockma install` replaces the guest atomically; a running VM keeps the old one until `dockma restart`. Offline, unpack the guest tarball into `~/.dockma/guest` yourself.
+- `dockma install` replaces the guest atomically; a running VM keeps the old one until `dockma restart`.
+- `dockma start` (and `restart`) runs `dockma install` itself when no guest is installed, or when the installed one came from another release. It never replaces a guest from `make install-guest` or one installed before 0.6; `DOCKMA_NO_AUTO_INSTALL=1` turns it off. Offline, unpack the guest tarball into `~/.dockma/guest` yourself.
 
 ### From source
 
@@ -171,8 +172,8 @@ Everything lives under `~/.dockma`, or `DOCKMA_HOME` (socket paths must stay und
 | `config.json` | Settings |
 | `daemon.json`, `ca-certificates/`, `certs.d/` | Optional dockerd settings, see [above](#docker-daemon-settings-and-certificates) |
 | `data.img` | Sparse ext4 disk, mounted at `/var/lib/docker` in the guest |
-| `guest/` | Guest kernel, initramfs and its protocol number, from `dockma install` or `make install-guest` |
-| `logs/console.log`, `docker.log`, `daemon.log` | Kernel and init, dockerd, and host daemon output; three previous runs kept as `.1`–`.3` |
+| `guest/` | Guest kernel, initramfs and its protocol number, from `dockma install` or `make install-guest`; `origin` says which (`release <version>` or `local`) |
+| `logs/console.log`, `docker.log`, `daemon.log` | Kernel and init, dockerd, and host daemon output; rotated at each start and past 10 MB, with three previous generations kept as `.1`–`.3` |
 | `daemon.lock`, `.guest-install.lock` | Held by the running daemon and by a running `dockma install` |
 | `io.dockma.daemon.plist` | The launchd job (`io.dockma.daemon.<hash>.plist` for a `DOCKMA_HOME`; in `~/Library/LaunchAgents` with autostart) |
 

@@ -30,7 +30,7 @@ The host CLI talks to the daemon over `~/.dockma/control.sock`: one JSON line in
 - The agent retries a failed host dial after 1 s.
 - While dockerd's socket is missing, the agent waits on inotify, with a 2 s fallback. It sleeps 1 s after other errors, or when the events stream ends.
 
-The guest image carries a protocol number: `vm/agent/protocol`, installed as `~/.dockma/guest/guest-protocol`. It must equal `GuestImage.protocolVersion`, and a test asserts that. Bump both on any incompatible host↔guest change. `start` and the daemon refuse a mismatched guest with a rebuild hint. Separately, the agent reports its own version (`version` in `vm/agent/main.go`, shown by `dockma status`): bump it in any change to the agent's non-test code, the minor for a feature and the patch for a fix.
+The guest image carries a protocol number: `vm/agent/protocol`, installed as `~/.dockma/guest/guest-protocol`. It must equal `GuestImage.protocolVersion`, and a test asserts that. Bump both on any incompatible host↔guest change. `start` and the daemon refuse a mismatched guest with a rebuild hint. Next to it, `guest/origin` (`GuestImage.origin(paths:)`) records `release <version>` (written by `dockma install`) or `local` (`make install-guest`); `status` warns when a release guest's version differs from the CLI's. Separately, the agent reports its own version (`version` in `vm/agent/main.go`, shown by `dockma status`): bump it in any change to the agent's non-test code, the minor for a feature and the patch for a fix.
 
 The agent accepts vsock connections only from the host (CID 2, `isHostPeer`), and the kernel has `VSOCKETS_LOOPBACK` off, so containers can't reach these ports. The host's port 1025 can't tell the agent from another process in the guest (same CID); the README documents that.
 
@@ -68,7 +68,7 @@ make guest                # build vm/out/{dockma-kernel,dockma-initrd.img} with 
 make install-guest        # copy guest artifacts to ~/.dockma/guest/
 dockma install            # or download the released guest of DockmaVersion.current (DOCKMA_RELEASE_URL overrides the source)
 make test                 # swift test (Swift Testing)
-make e2e                  # build + scripts/e2e.sh against its own VM in ~/.dockma-e2e (E2E_HOME); the user's VM keeps running
+make e2e                  # build + scripts/e2e.sh against its own VM in ~/.dockma-e2e (E2E_HOME); the user's VM keeps running; DOCKMA_NO_AUTO_INSTALL=1, so it tests the installed guest
 scripts/bench.sh          # boot time with a phase breakdown (restarts the user's VM RUNS times; RUNS=0 skips boot)
 DISK=1 RUNS=0 scripts/bench.sh   # per-step build overhead on LAYER_BASE with guest I/O pressure (steps parsed by scripts/bench-build-steps.py)
 scripts/bench-compare.py --prepare && scripts/bench-compare.py   # dockma vs Lima vs OrbStack, method in docs/benchmarks.md; stops daily engines, restores them at exit
@@ -114,6 +114,7 @@ No linter or formatter is configured for the code. Lint workflows with `docker r
   - An agent that connects during a stop still gets `shutdown`, but its deadline is the request time plus the grace. A reconnecting agent can't postpone the hard stop.
   - `bootout`'s timeout (40 s) must stay above `shutdownGrace`, or `dockma stop` gives up before the daemon exits.
 - **Guest logs leave through one virtio console device with named ports** (`VMConfigurationBuilder.makeLogPort`). "console" is the kernel console, `hvc0`, a TTY, so `console.log` lines end in `\r\n`, which Swift treats as one Character: split with `isNewline`. "docker" is a plain port that rcS links as `/dev/virtio-ports/docker`; dockerd writes there directly, with `\n` endings. The guest finds ports by name, not probe order, so `driver_async_probe=virtio-pci` (about 10 ms) would now be safe; it isn't enabled.
+- **VZ's XPC process holds its own copies of the log descriptors.** `com.apple.Virtualization.VirtualMachine` writes `console.log` and `docker.log` through descriptors of its own, so swapping the file under the daemon's descriptor (`dup2`) doesn't reach it. `Daemon.rotate(_:ifLargerThan:writtenBy:)` copies and truncates instead, which works because `rotateAndOpen` opens with `O_APPEND`.
 - **The driver adds multiport ports asynchronously.** `hvc0` appeared only about 2 ms before `/init` ran, so stage-0 `/init` waits up to 1 s for `/dev/console` and reopens its fds, but only if it opens: a failed redirection on `exec` or on a special builtin like `:` ends the shell, and PID 1 exiting panics the kernel. Probe with `true`.
 - **Kernel config gates in the Dockerfile.**
   - Every option in `vm/kernel/dockma.config` must survive `olddefconfig`. A dropped option means an unmet dependency. Every `# CONFIG_X is not set` line must stay disabled; another option's `select` can turn it back on.

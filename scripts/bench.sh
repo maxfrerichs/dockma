@@ -13,6 +13,8 @@ DISK=${DISK:-0}
 LAYER_BASE=${LAYER_BASE:-ddev/ddev-webserver:v1.25.4}
 # Pinned to dockma's socket so another engine (Lima, Docker Desktop) can't answer instead.
 export DOCKER_HOST="unix://$DOCKMA_DIR/docker.sock"
+# Test the guest that is installed, never one start downloads.
+export DOCKMA_NO_AUTO_INSTALL=1
 HERE=$(cd "$(dirname "$0")" && pwd)
 step() { echo "--- $*"; }
 

@@ -51,6 +51,8 @@ public struct Paths: Sendable {
     public var initrd: URL { guest.appendingPathComponent("dockma-initrd.img") }
     /// The host↔guest protocol number the guest image was built for.
     public var guestProtocol: URL { guest.appendingPathComponent("guest-protocol") }
+    /// Where the guest image came from: `release <version>` or `local`.
+    public var guestOrigin: URL { guest.appendingPathComponent("origin") }
     /// Held (flock) by a running `dockma install`.
     public var guestInstallLock: URL { root.appendingPathComponent(".guest-install.lock") }
 
