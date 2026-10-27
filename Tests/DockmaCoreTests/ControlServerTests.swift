@@ -89,3 +89,19 @@ private func fakeDocker(path: String, response: String) throws -> SocketListener
     #expect(await runOnThread { !DockerPing.isResponding(socketPath: failing) })
     #expect(await runOnThread { !DockerPing.isResponding(socketPath: makeSocketPath()) })
 }
+
+/// A daemon whose reply doesn't decode is still a running daemon, not none.
+@MainActor
+@Test func daemonWithAnUndecodableReplyIsAnswering() async throws {
+    let root = URL(fileURLWithPath: "/tmp/dockma-test-\(UUID().uuidString.prefix(8))")
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let paths = Paths(root: root, home: root)
+    let listener = try ControlServer.listen(path: paths.controlSocket.path) { _, reply in reply.send(Data(#"{"state":1}"#.utf8)) }
+    defer { listener.cancel() }
+    let (answering, decodes) = try await runOnThread {
+        (ControlClient.isDaemonAnswering(paths: paths), (try? ControlClient.status(paths: paths)) != nil)
+    }
+    #expect(answering)
+    #expect(!decodes)
+}

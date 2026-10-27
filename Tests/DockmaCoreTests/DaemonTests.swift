@@ -62,3 +62,22 @@ import Testing
     let exitTimeOut = try #require(plist["ExitTimeOut"] as? Int)
     #expect(Daemon.shutdownGrace < .seconds(exitTimeOut))
 }
+
+@Test func largeLogIsCopiedAndTruncatedInPlace() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("dockma-logs-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let log = dir.appendingPathComponent("console.log")
+    let writer = try Daemon.rotateAndOpen(log)
+    defer { try? writer.close() }
+    try writer.write(contentsOf: Data("old".utf8))
+    // Another writer of the same open file, like VZ's XPC process.
+    let other = FileHandle(fileDescriptor: dup(writer.fileDescriptor), closeOnDealloc: true)
+    defer { try? other.close() }
+    Daemon.rotate(log, ifLargerThan: 10, writtenBy: writer.fileDescriptor)
+    #expect(!FileManager.default.fileExists(atPath: log.appendingPathExtension("1").path))
+    Daemon.rotate(log, ifLargerThan: 2, writtenBy: writer.fileDescriptor)
+    try other.write(contentsOf: Data("new".utf8))
+    #expect(FileManager.default.contents(atPath: log.path) == Data("new".utf8))
+    #expect(FileManager.default.contents(atPath: log.appendingPathExtension("1").path) == Data("old".utf8))
+}

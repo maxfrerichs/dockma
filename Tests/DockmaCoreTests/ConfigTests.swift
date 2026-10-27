@@ -89,3 +89,25 @@ func configRejectsInvalidValues(config: Config) {
     try VMConfigurationBuilder.checkDataDiskResize(currentBytes: 64 << 30, toGiB: 128)
     #expect(throws: DockmaError.self) { try VMConfigurationBuilder.checkDataDiskResize(currentBytes: 64 << 30, toGiB: 32) }
 }
+
+@Test func configSaveKeepsUnknownKeys() throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: url) }
+    try Data(#"{"cpus": 3, "macAddress": "02:00:00:00:00:01", "shares": ["/private/tmp"]}"#.utf8).write(to: url)
+    var config = try Config.load(from: url)
+    config.cpus = 5
+    config.macAddress = nil
+    try config.save(to: url)
+    let object = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
+    #expect(object["shares"] as? [String] == ["/private/tmp"])
+    #expect(object["cpus"] as? Int == 5)
+    #expect(object["macAddress"] == nil)
+    #expect(try Config.load(from: url) == config)
+}
+
+@Test func diskWarningCountsOnlyWhatTheImageCanStillClaim() {
+    let config = Config(diskGiB: 100)
+    #expect(config.diskWarning(allocatedBytes: 0, hostFreeBytes: 50 << 30) != nil)
+    #expect(config.diskWarning(allocatedBytes: 60 << 30, hostFreeBytes: 50 << 30) == nil)
+    #expect(config.diskWarning(allocatedBytes: 200 << 30, hostFreeBytes: 0) == nil)
+}

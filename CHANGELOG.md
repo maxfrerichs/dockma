@@ -4,12 +4,25 @@ All notable changes to dockma are recorded here. The format follows [Keep a Chan
 
 ## Unreleased
 
+### Added
+- `dockma install` stamps the guest with the release it came from (`~/.dockma/guest/origin`), and `make install-guest` stamps it `local`. `dockma status` warns when the installed guest is from another dockma release than the CLI.
+- `dockma start` and `restart` install this version's guest when none is installed, or when the installed one came from another release, so upgrading the CLI alone is enough. A guest built from source (`make install-guest`) or installed before this release is never replaced; run `dockma install` once to opt in. `DOCKMA_NO_AUTO_INSTALL=1` turns it off. The daemon's own launches, at login and after a crash, don't install anything.
+
 ### Changed
 - Containers start and stop faster. `docker run` of a container that exits at once takes about 80 ms instead of 170 ms, and the VM boots to Docker ready in about 0.6 s instead of 0.8 s. Idle CPU use is unchanged. Two changes contribute: the host now boots the guest kernel with expedited RCU grace periods (`rcupdate.rcu_expedited=1`), which takes effect after `dockma restart`; and the guest kernel's timer runs at 1000 Hz instead of 250 Hz, which shortened removing a container's network link from 21 ms to about 9 ms. The timer change needs the new guest: `dockma install`, or `make guest install-guest` for a source build.
 - The guest's logs leave through one virtio console device with named ports, "console" and "docker", instead of two console devices told apart by probe order. dockerd writes its log directly to the "docker" port, without a TTY or a wrapper pipe. The VM has one PCI device fewer, which shortens kernel boot by about 8 ms. This changes the guest protocol to 4: install the matching guest with `dockma install` (install.sh does this), or `make guest install-guest` for a source build.
 - The guest's kernel and initramfs are named as LinuxKit names its kernel+initrd output: `~/.dockma/guest/dockma-kernel` and `dockma-initrd.img` (were `Image` and `initramfs.cpio.lz4`). `dockma install`, which install.sh runs, puts the new files in place. A CLI built from source needs `make guest install-guest` once; until then `dockma start` refuses with that hint.
+- Sequential writes to the container filesystem are about 25 % faster (5.3 instead of 4.1 GB/s for 1 GiB): the guest kernel enables transparent huge pages in madvise mode, so ext4 can use large page-cache folios. fsync-bound writes and the VM's host memory use are unchanged. Needs the new guest: `dockma install`, or `make guest install-guest` for a source build.
 
 ### Fixed
+- `dockma start` records the path it was run as in the launchd job, symlinks included, instead of the symlink's target. A package manager's upgrade that deletes the old versioned directory no longer breaks the next autostart or crash restart. Run `dockma restart` once after upgrading to rewrite the job.
+- The logs in `~/.dockma/logs` no longer grow without limit while the VM runs: each is rotated once it passes 10 MB, keeping three previous generations as before.
+- `dockma config --disk` warns when the data disk could grow past the free space on the Mac's volume.
+- The guest logs a failed `resize2fs` to `console.log` instead of hiding it; the data disk then keeps its old size. Needs the new guest (`dockma install`, or `make guest install-guest`).
+- `dockma logs -f` exits quietly when its reader goes away, and `dockma shell` restores the terminal reliably when it is killed.
+- A SIGHUP, such as from closing the terminal of a `dockma daemon` run by hand, shuts the VM down gracefully instead of killing the daemon outright.
+- A daemon whose status this CLI couldn't decode, such as one from another dockma version, counted as not running: `dockma status` said "stopped", and `start`, `stop`, `config` and `delete` acted as if no VM were running. `status` now says the daemon runs another version and suggests `dockma restart` (`status --json` reports `"state":"unknown"`), and a state that a newer daemon reports but this CLI doesn't know shows as `unknown`.
+- `dockma config`, and the daemon when it stores the VM's MAC address, keep `config.json` keys they don't know instead of dropping them, so running an older dockma no longer erases settings a newer one added.
 - A tunnelled connection whose client failed mid-stream (a reset rather than a close) no longer stays open in the guest while the container's side is idle; the agent now closes both ends. An agent whose vsock accept kept failing no longer re-listens in a tight loop. The agent is 0.6.1. Needs the new guest (`dockma install`, or `make guest install-guest`).
 
 ## 0.5.0 – 2026-10-19

@@ -10,7 +10,9 @@ public final class ShellSession: @unchecked Sendable {
     private let input: Int32
     private let writeLock = NSLock()
     private var signalSources: [DispatchSourceSignal] = []
+    /// Guarded by `terminalLock`: a signal handler restores it off the main thread.
     private var savedTerminal: termios?
+    private let terminalLock = NSLock()
 
     /// Stdin flow control. `unknown` until the agent's first frame says
     /// whether it grants credit (`window` before `started`) or predates flow
@@ -192,15 +194,18 @@ public final class ShellSession: @unchecked Sendable {
         guard isatty(STDIN_FILENO) == 1 else { return }
         var original = termios()
         guard tcgetattr(STDIN_FILENO, &original) == 0 else { return }
-        savedTerminal = original
+        terminalLock.withLock { savedTerminal = original }
         var raw = original
         cfmakeraw(&raw)
         tcsetattr(STDIN_FILENO, TCSANOW, &raw)
     }
 
+    /// Puts the terminal back as `enterRawMode` found it, at most once.
     private func restoreTerminal() {
-        guard var original = savedTerminal else { return }
-        tcsetattr(STDIN_FILENO, TCSANOW, &original)
-        savedTerminal = nil
+        terminalLock.withLock {
+            guard var original = savedTerminal else { return }
+            tcsetattr(STDIN_FILENO, TCSANOW, &original)
+            savedTerminal = nil
+        }
     }
 }

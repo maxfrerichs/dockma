@@ -14,6 +14,10 @@ public final class Daemon {
     static let timeSyncInterval: Duration = .seconds(30)
     /// How often ports that failed to bind are tried again.
     static let portRetryInterval: Duration = .seconds(10)
+    /// How often the logs are checked against `maxLogBytes`.
+    static let logCheckInterval: Duration = .seconds(60)
+    /// The size past which a log is rotated while the daemon runs.
+    nonisolated static let maxLogBytes: UInt64 = 10 << 20
 
     private let paths: Paths
     private var config = Config()
@@ -35,6 +39,8 @@ public final class Daemon {
     private var effectiveCPUs = 0
     private var effectiveMemoryMiB: UInt64 = 0
     private var lockFD: Int32 = -1
+    /// Each log the daemon writes and a descriptor that writes to it.
+    private var logDescriptors: [(url: URL, fd: Int32)] = []
     private let startedAt = Date()
 
     public init(paths: Paths) {
@@ -53,11 +59,13 @@ public final class Daemon {
             Log.info("startup failed: \(error)")
             exit(0)
         }
-        Self.redirectOutput(to: paths.daemonLog)
+        if Self.redirectOutput(to: paths.daemonLog) {
+            logDescriptors.append((paths.daemonLog, STDERR_FILENO))
+        }
         Log.info("file descriptor limit: \(Self.raiseFileLimit())")
 
         signal(SIGPIPE, SIG_IGN)
-        for sig in [SIGTERM, SIGINT] {
+        for sig in [SIGTERM, SIGINT, SIGHUP] {
             signal(sig, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
             source.setEventHandler { [weak self] in
@@ -102,6 +110,7 @@ public final class Daemon {
 
         let consoleLog = try Self.rotateAndOpen(paths.consoleLog)
         let dockerLog = try Self.rotateAndOpen(paths.dockerLog)
+        logDescriptors += [(paths.consoleLog, consoleLog.fileDescriptor), (paths.dockerLog, dockerLog.fileDescriptor)]
         let built = try VMConfigurationBuilder.build(config: config, paths: paths, consoleLog: consoleLog, dockerLog: dockerLog)
         effectiveCPUs = built.configuration.cpuCount
         effectiveMemoryMiB = built.configuration.memorySize >> 20
@@ -180,6 +189,14 @@ public final class Daemon {
                 try? await Task.sleep(for: Self.timeSyncInterval)
                 guard let self, !self.isStopRequested else { return }
                 self.agent?.send(.setTime(Date()))
+            }
+        }
+
+        Task { [weak self] in
+            while true {
+                try? await Task.sleep(for: Self.logCheckInterval)
+                guard let self, !self.isStopRequested else { return }
+                for log in self.logDescriptors { Self.rotate(log.url, ifLargerThan: Self.maxLogBytes, writtenBy: log.fd) }
             }
         }
 
@@ -350,18 +367,43 @@ public final class Daemon {
     /// oldest, and opens a fresh file (mode 0600) for writing.
     nonisolated static func rotateAndOpen(_ url: URL) throws -> FileHandle {
         let fm = FileManager.default
-        func generation(_ n: Int) -> URL { url.appendingPathExtension(String(n)) }
         if fm.fileExists(atPath: url.path) {
-            try? fm.removeItem(at: generation(keptLogGenerations))
-            for n in stride(from: keptLogGenerations - 1, through: 1, by: -1) where fm.fileExists(atPath: generation(n).path) {
-                try? fm.moveItem(at: generation(n), to: generation(n + 1))
-            }
-            try fm.moveItem(at: url, to: generation(1))
+            shiftGenerations(of: url)
+            try fm.moveItem(at: url, to: url.appendingPathExtension("1"))
         }
-        guard fm.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600]) else {
-            throw DockmaError("cannot create \(url.path)")
+        let fd = open(url.path, O_WRONLY | O_CREAT | O_TRUNC | O_APPEND | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw DockmaError.posix("cannot create \(url.path)") }
+        return FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+    }
+
+    /// Moves `<name>.1` … `<name>.2` up one generation, dropping the oldest,
+    /// so `<name>.1` is free.
+    nonisolated static func shiftGenerations(of url: URL) {
+        let fm = FileManager.default
+        func generation(_ n: Int) -> URL { url.appendingPathExtension(String(n)) }
+        try? fm.removeItem(at: generation(keptLogGenerations))
+        for n in stride(from: keptLogGenerations - 1, through: 1, by: -1) where fm.fileExists(atPath: generation(n).path) {
+            try? fm.moveItem(at: generation(n), to: generation(n + 1))
         }
-        return try FileHandle(forWritingTo: url)
+    }
+
+    /// Rotates `url`, which `fd` writes, once it exceeds `limit` bytes: copies
+    /// it to `<name>.1` and truncates it in place. VZ's serial ports write
+    /// through copies of the descriptor in its XPC process, so the file can't
+    /// be swapped; `rotateAndOpen`'s O_APPEND makes those writes follow the
+    /// truncation.
+    /// shortcut: lines written between the copy and the truncation are lost;
+    /// relay the guest's ports through a pipe if that ever matters.
+    nonisolated static func rotate(_ url: URL, ifLargerThan limit: UInt64, writtenBy fd: Int32) {
+        guard let size = try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? UInt64, size > limit else { return }
+        do {
+            shiftGenerations(of: url)
+            // A clone on APFS, so the window above stays short.
+            try FileManager.default.copyItem(at: url, to: url.appendingPathExtension("1"))
+            guard ftruncate(fd, 0) == 0 else { throw DockmaError.posix("truncate") }
+        } catch {
+            Log.info("cannot rotate \(url.lastPathComponent): \(error)")
+        }
     }
 
     /// Takes an exclusive lock that is held for the life of the process, so a
@@ -374,11 +416,14 @@ public final class Daemon {
     /// launchd appends the daemon's stdout and stderr to daemon.log forever.
     /// Rotate it like the VM logs and point both descriptors at the fresh
     /// file. A daemon run from a terminal keeps writing to the terminal.
-    nonisolated static func redirectOutput(to url: URL) {
-        guard isatty(STDERR_FILENO) == 0, let handle = try? rotateAndOpen(url) else { return }
+    /// Returns whether it redirected.
+    @discardableResult
+    nonisolated static func redirectOutput(to url: URL) -> Bool {
+        guard isatty(STDERR_FILENO) == 0, let handle = try? rotateAndOpen(url) else { return false }
         dup2(handle.fileDescriptor, STDOUT_FILENO)
         dup2(handle.fileDescriptor, STDERR_FILENO)
         try? handle.close()
+        return true
     }
 
     /// launchd starts jobs with a soft limit of 256 descriptors, and every
