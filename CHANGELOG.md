@@ -4,6 +4,8 @@ All notable changes to dockma are recorded here. The format follows [Keep a Chan
 
 ## Unreleased
 
+## 0.6.0 – 2026-10-27
+
 ### Added
 - `dockma install` stamps the guest with the release it came from (`~/.dockma/guest/origin`), and `make install-guest` stamps it `local`. `dockma status` warns when the installed guest is from another dockma release than the CLI.
 - `dockma start` and `restart` install this version's guest when none is installed, or when the installed one came from another release, so upgrading the CLI alone is enough. A guest built from source (`make install-guest`) or installed before this release is never replaced; run `dockma install` once to opt in. `DOCKMA_NO_AUTO_INSTALL=1` turns it off. The daemon's own launches, at login and after a crash, don't install anything.
