@@ -30,6 +30,9 @@ RUN gcc -O2 -o /usr/local/bin/gen_init_cpio /build/linux/usr/gen_init_cpio.c
 
 FROM kernel-src AS kernel
 WORKDIR /build/linux
+# Host file changes into guest inotify; built into virtiofs, which the agent feeds.
+COPY kernel/dockma_notify.c fs/fuse/
+RUN echo "virtiofs-y += dockma_notify.o" >>fs/fuse/Makefile
 COPY kernel/dockma.config /build/dockma.config
 RUN make ARCH=arm64 tinyconfig \
  && scripts/kconfig/merge_config.sh -m .config /build/dockma.config \

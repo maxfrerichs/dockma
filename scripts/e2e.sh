@@ -30,10 +30,15 @@ fi
 user_daemon_json=
 # A failed run leaves nothing behind that would make the next run fail.
 cleanup() {
-	docker rm -f dockma-e2e-nginx dockma-e2e-echo dockma-e2e-held dockma-e2e-dind dockma-e2e-k3s >/dev/null 2>&1 || true
+	docker rm -f dockma-e2e-nginx dockma-e2e-echo dockma-e2e-held dockma-e2e-dind dockma-e2e-k3s dockma-e2e-notify >/dev/null 2>&1 || true
 	docker network rm dockma-e2e-net >/dev/null 2>&1 || true
-	docker volume rm dockma-e2e >/dev/null 2>&1 || true
+	docker volume rm dockma-e2e dockma-e2e-notify >/dev/null 2>&1 || true
 	[ -z "${marker:-}" ] || rm -f -- "$marker"
+	case "${notify_dir:-}" in
+	"$HOME"/.dockma-e2e-notify-*)
+		"$DOCKMA" shell -- umount "$notify_dir/mfile" >/dev/null 2>&1 || true
+		rm -rf -- "$notify_dir" ;;
+	esac
 	[ -z "${holder:-}" ] || kill "$holder" 2>/dev/null || true
 	if [ -n "$user_daemon_json" ]; then
 		mv "$user_daemon_json" "$DOCKMA_DIR/daemon.json"
@@ -68,6 +73,57 @@ marker="$HOME/.dockma-e2e-$$"
 docker run --rm -v "$HOME:$HOME" alpine sh -c "echo ok > '$marker'"
 [ "$(cat "$marker")" = ok ] || fail "file written in container not visible on host"
 rm -f "$marker"
+
+step "host file changes raise inotify events through /proc/fs/dockma-notify"
+notify_dir="$HOME/.dockma-e2e-notify-$$"
+mkdir -p "$notify_dir/sub"
+echo old >"$notify_dir/preexisting"
+docker run -d --name dockma-e2e-notify -v "$notify_dir:/n" -v dockma-e2e-notify:/n/sub alpine sh -c \
+	'apk add -q inotify-tools && echo kept >/n/sub/marker && inotifywait -m -q --format "%e %f" /n >/tmp/ev' >/dev/null
+notify_ready=
+for _ in $(seq 300); do
+	docker exec dockma-e2e-notify pgrep inotifywait >/dev/null 2>&1 && { notify_ready=1; break; }
+	sleep 0.1
+done
+[ -n "$notify_ready" ] || fail "inotifywait did not start (apk add needs the network): $(docker logs dockma-e2e-notify 2>&1 | tail -n 3)"
+sleep 0.3 # lets inotifywait set its watch
+notify() { "$DOCKMA" shell -- sh -c "printf '%s' '$1' >/proc/fs/dockma-notify"; }
+# Emptying the file under inotifywait leaves NULs where it goes on writing.
+take_events() { docker exec dockma-e2e-notify sh -c 'tr -d "\000" </tmp/ev; : >/tmp/ev'; }
+# expect_events <ERE> <what>: waits for a matching event, then discards what arrived.
+expect_events() {
+	for _ in $(seq 20); do
+		docker exec dockma-e2e-notify sh -c 'tr -d "\000" </tmp/ev' | grep -Eq "$1" && { take_events >/dev/null; return; }
+		sleep 0.1
+	done
+	fail "$2: no '$1' in: $(take_events | tr '\n' ' ')"
+}
+echo new >"$notify_dir/a" && notify "C $notify_dir/a" || fail "notify C"
+expect_events '^CREATE a$' "create on the Mac"
+echo changed >"$notify_dir/a" && notify "M $notify_dir/a" || fail "notify M"
+expect_events '^MODIFY a$' "change on the Mac"
+[ "$(docker exec dockma-e2e-notify cat /n/a)" = changed ] || fail "container still reads the old content"
+rm "$notify_dir/preexisting" && notify "D $notify_dir/preexisting" || fail "notify D"
+expect_events '^DELETE preexisting$' "delete of a file the container never opened"
+mkdir "$notify_dir/d" && notify "C $notify_dir/d" && rmdir "$notify_dir/d" && notify "D $notify_dir/d" || fail "notify directory"
+expect_events '^DELETE,ISDIR d$' "directory delete on the Mac"
+docker exec dockma-e2e-notify mkdir /n/g && expect_events '^CREATE,ISDIR g$' "guest mkdir"
+notify "C $notify_dir/g" || fail "notify C echo"
+sleep 0.3
+[ -z "$(take_events)" ] || fail "the echo of the guest's own mkdir raised events"
+notify "M $notify_dir/sub" && notify "M $notify_dir" || fail "notify M on directories"
+[ "$(docker exec dockma-e2e-notify cat /n/sub/marker)" = kept ] || fail "a notify detached the volume mounted over the share"
+# A path leading onto another filesystem is refused, not handled as virtio-fs.
+echo f >"$notify_dir/mfile"
+"$DOCKMA" shell -- sh -c "echo guest >/run/dockma-e2e-src && mount --bind /run/dockma-e2e-src '$notify_dir/mfile'" ||
+	fail "mount over a shared file in the guest"
+notify "M $notify_dir/mfile" 2>/dev/null && fail "notify accepted a path whose file is another filesystem's"
+"$DOCKMA" shell -- umount "$notify_dir/mfile"
+notify "M relative" 2>/dev/null && fail "notify accepted a relative path"
+docker run --rm alpine sh -c 'echo "M /" >/proc/fs/dockma-notify' 2>/dev/null && fail "a default container can write to dockma-notify"
+docker rm -f dockma-e2e-notify >/dev/null
+docker volume rm dockma-e2e-notify >/dev/null
+rm -rf -- "$notify_dir"
 
 step "stdin half-close (docker run -i)"
 [ "$(echo piped | docker run --rm -i alpine cat)" = piped ] || fail "stdin round trip"
