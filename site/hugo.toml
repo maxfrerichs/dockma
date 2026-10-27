@@ -11,7 +11,7 @@ enableRobotsTXT = true
   # CI overrides this with HUGO_PARAMS_REPO=<owner>/<repo>.
   repo = "maxfrerichs/dockma"
   # Measured by scripts/bench.sh, so not derivable from source; update by hand.
-  bootSeconds = "1.1"
+  bootSeconds = "1.0"
 
 [markup.goldmark.renderer]
   unsafe = true
