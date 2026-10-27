@@ -71,3 +71,33 @@ func TestPublishedPortsEmpty(t *testing.T) {
 		t.Fatalf("got %+v, want empty", got)
 	}
 }
+
+func TestWatchedPaths(t *testing.T) {
+	const fixture = `[
+	  {"Mounts": [
+	    {"Type": "bind", "Source": "/Users/me/src/app"},
+	    {"Type": "bind", "Source": "/Users/me/src/app/node_modules"},
+	    {"Type": "volume", "Source": "/var/lib/docker/volumes/v/_data"},
+	    {"Type": "bind", "Source": "/etc/hosts"}
+	  ]},
+	  {"Mounts": [
+	    {"Type": "bind", "Source": "/Users/me/src/app-two"},
+	    {"Type": "bind", "Source": "/Users/me/src/app"},
+	    {"Type": "bind", "Source": "/Users/meta/x"}
+	  ]},
+	  {"Mounts": []}
+	]`
+	var containers []Container
+	if err := json.Unmarshal([]byte(fixture), &containers); err != nil {
+		t.Fatal(err)
+	}
+	got := WatchedPaths(containers, "/Users/me")
+	// "/Users/me/src/app-two" sorts between "/Users/me/src/app" and its child.
+	want := []string{"/Users/me/src/app", "/Users/me/src/app-two"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if got := WatchedPaths(containers, ""); got != nil {
+		t.Fatalf("without a share: got %q, want none", got)
+	}
+}

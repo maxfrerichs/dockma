@@ -4,6 +4,9 @@ All notable changes to dockma are recorded here. The format follows [Keep a Chan
 
 ## Unreleased
 
+### Added
+- Changes made on the Mac to a bind mount under home now fire inotify events in containers, so file watchers like `vite`, `nodemon` and `webpack --watch` pick up edits. The guest's own writes aren't reported back to it twice. Needs the new guest (`dockma install` or `make guest install-guest`); an older guest keeps working without the events.
+
 ## 0.6.0 – 2026-10-27
 
 ### Added

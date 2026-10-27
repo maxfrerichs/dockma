@@ -2,7 +2,9 @@
 // macOS host: a byte proxy to dockerd's socket, TCP and UDP tunnels for
 // published container ports, and shell sessions. It also dials the host's
 // JSON-lines control port, so the host learns the moment the agent is up,
-// and serves DNS for containers (dns.go). `dockma-agent daemon-config`
+// and serves DNS for containers (dns.go). Changes made on the Mac to watched
+// bind mounts become inotify events in the guest (fileevents.go).
+// `dockma-agent daemon-config`
 // writes dockerd's configuration instead (daemonconfig.go).
 package main
 
@@ -20,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -29,7 +32,7 @@ import (
 )
 
 const (
-	version = "0.6.1"
+	version = "0.7.0"
 
 	dockerPort  = 1024
 	controlPort = 1025
@@ -52,19 +55,21 @@ func main() {
 	go serveDNS(newDNSForwarder())
 	go trimDataDisk()
 	ports := newPortWatcher()
+	ports.share = homeShare()
 	go ports.run(context.Background())
+	files := newFileForwarder()
 
 	go serve(dockerPort, func(c net.Conn) {
 		proxy(c, func() (net.Conn, error) { return net.Dial("unix", dockerSocket) })
 	})
 	go serve(tunnelPort, handleTunnel)
 	go serve(shellPort, handleShell)
-	dialControl(ports)
+	dialControl(ports, files)
 }
 
 // dialControl keeps a control connection to the host open. The host listens
 // before the VM boots, so the retry only covers a host that went away.
-func dialControl(ports *portWatcher) {
+func dialControl(ports *portWatcher, files *fileForwarder) {
 	var errs changeLogger
 	for {
 		c, err := vsock.Dial(vsock.Host, controlPort, nil)
@@ -72,7 +77,7 @@ func dialControl(ports *portWatcher) {
 			errs.printf("dial host vsock:%d: %v", controlPort, err)
 		} else {
 			errs.reset()
-			handleControl(c, ports)
+			handleControl(c, ports, files)
 		}
 		time.Sleep(time.Second)
 	}
@@ -269,6 +274,10 @@ type message struct {
 	Ports     []ForwardedPort `json:"ports,omitempty"`
 	Ready     *bool           `json:"ready,omitempty"`
 	UnixNanos int64           `json:"unixNanos,omitempty"`
+	// Paths of a guest→host "watch": the host directories to watch for changes.
+	Paths []string `json:"paths,omitempty"`
+	// Files of a host→guest "files": changes made on the Mac.
+	Files []fileEvent `json:"files,omitempty"`
 }
 
 // dockerMessage reports whether dockerd's API answers.
@@ -276,7 +285,9 @@ func dockerMessage(ready bool) message {
 	return message{Type: "docker", Ready: &ready}
 }
 
-func handleControl(c net.Conn, ports *portWatcher) {
+// handleControl serves one host connection. files is nil when the guest
+// can't raise file events; the host's batches are then dropped.
+func handleControl(c net.Conn, ports *portWatcher, files *fileForwarder) {
 	defer c.Close()
 	var writeMu sync.Mutex
 	send := func(m message) error {
@@ -311,6 +322,12 @@ func handleControl(c net.Conn, ports *portWatcher) {
 					return
 				}
 			}
+			if sent == nil || !slices.Equal(sent.Watch, state.Watch) {
+				if send(message{Type: "watch", Paths: state.Watch}) != nil {
+					c.Close()
+					return
+				}
+			}
 			sent = &state
 		}
 	}()
@@ -325,6 +342,10 @@ func handleControl(c net.Conn, ports *portWatcher) {
 		switch m.Type {
 		case "settime":
 			setTime(m.UnixNanos)
+		case "files":
+			if files != nil {
+				files.enqueue(m.Files)
+			}
 		case "shutdown":
 			log.Print("shutdown requested by host")
 			if err := exec.Command("poweroff").Run(); err != nil {
@@ -370,11 +391,12 @@ func setTime(unixNanos int64) {
 	}
 }
 
-// watcherState is what the port watcher fans out: the published ports and
-// whether dockerd's API answers.
+// watcherState is what the port watcher fans out: the published ports,
+// whether dockerd's API answers, and the bind-mount sources to watch.
 type watcherState struct {
 	Ports       []ForwardedPort
 	DockerReady bool
+	Watch       []string
 }
 
 // portWatcher tracks published ports and dockerd's readiness via the Docker
@@ -385,6 +407,8 @@ type portWatcher struct {
 	current watcherState
 	subs    map[chan watcherState]struct{}
 	client  *http.Client
+	// share is the home share's guest path; "" means no bind mount is watched.
+	share string
 }
 
 func newPortWatcher() *portWatcher {
@@ -435,7 +459,7 @@ func (w *portWatcher) update(change func(*watcherState)) {
 	defer w.mu.Unlock()
 	next := w.current
 	change(&next)
-	if next.DockerReady == w.current.DockerReady && equalPorts(next.Ports, w.current.Ports) {
+	if next.DockerReady == w.current.DockerReady && equalPorts(next.Ports, w.current.Ports) && slices.Equal(next.Watch, w.current.Watch) {
 		return
 	}
 	w.current = next
@@ -545,6 +569,9 @@ func (w *portWatcher) relist(ctx context.Context) error {
 	if err := json.NewDecoder(resp.Body).Decode(&containers); err != nil {
 		return err
 	}
-	w.publish(PublishedPorts(containers))
+	w.update(func(s *watcherState) {
+		s.Ports = PublishedPorts(containers)
+		s.Watch = WatchedPaths(containers, w.share)
+	})
 	return nil
 }

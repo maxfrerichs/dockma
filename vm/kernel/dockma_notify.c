@@ -7,7 +7,9 @@
  * path (the host already has the change) and raises the inotify events a local
  * change would have raised. Nothing goes back to the host.
  *   M  file content or metadata changed: MODIFY, ATTRIB, CLOSE_WRITE
- *   C  created: CREATE (or CREATE|ISDIR), then M for files
+ *   C  created: CREATE (or CREATE|ISDIR) only; the agent follows with M for a
+ *      file. C must come before anything in the guest looks the name up: a
+ *      lookup caches the new inode, and C would then take it for known.
  *   D  deleted: DELETE on the parent (with ISDIR if the guest knew it as a directory)
  * M on a directory only expires its name. A rename is D old + C new. A C for an
  * inode the guest already had under that name, such as the host's echo of the
@@ -98,11 +100,13 @@ static int dn_apply(char op, const char *path)
 	 * The guest already had this inode under this name: not new to it. The name comes
 	 * from the agent, because child's d_name can change under a guest rename.
 	 */
-	if (op == 'C' && !(cached && d_inode(cached) == d_inode(child.dentry)))
-		fsnotify_name(d_is_dir(child.dentry) ? FS_CREATE | FS_ISDIR : FS_CREATE,
-			      child.dentry, FSNOTIFY_EVENT_DENTRY, dir, &name, 0);
-	if (!d_is_dir(child.dentry))
+	if (op == 'C') {
+		if (!(cached && d_inode(cached) == d_inode(child.dentry)))
+			fsnotify_name(d_is_dir(child.dentry) ? FS_CREATE | FS_ISDIR : FS_CREATE,
+				      child.dentry, FSNOTIFY_EVENT_DENTRY, dir, &name, 0);
+	} else if (!d_is_dir(child.dentry)) {
 		dn_modified(child.dentry);
+	}
 put_child:
 	path_put(&child);
 put_cached:

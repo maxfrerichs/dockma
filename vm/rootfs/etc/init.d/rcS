@@ -65,7 +65,12 @@ cmdline_path() {
 home=$(cmdline_path home)
 if [ -n "$home" ]; then
 	mkdir -p "$home"
-	mount -t virtiofs home "$home" || log "home share not mounted"
+	if mount -t virtiofs home "$home"; then
+		# The agent raises file events for changes made on the Mac below it.
+		echo "$home" >/run/dockma/home
+	else
+		log "home share not mounted"
+	fi
 fi
 
 # The state directory (~/.dockma or DOCKMA_HOME) holds the user's guest

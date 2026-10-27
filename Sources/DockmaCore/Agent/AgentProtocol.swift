@@ -73,14 +73,20 @@ public struct AgentMessage: Codable, Equatable, Sendable {
     /// Whether dockerd's API answers; set on `docker` messages.
     public var ready: Bool?
     public var unixNanos: Int64?
+    /// The bind-mount sources on the home share to watch; set on `watch` messages.
+    public var paths: [String]?
+    /// Changes made on the Mac; set on `files` messages.
+    public var files: [FileEvent]?
 
-    public init(type: String, version: String? = nil, kernel: String? = nil, ports: [ForwardedPort]? = nil, ready: Bool? = nil, unixNanos: Int64? = nil) {
+    public init(type: String, version: String? = nil, kernel: String? = nil, ports: [ForwardedPort]? = nil, ready: Bool? = nil, unixNanos: Int64? = nil, paths: [String]? = nil, files: [FileEvent]? = nil) {
         self.type = type
         self.version = version
         self.kernel = kernel
         self.ports = ports
         self.ready = ready
         self.unixNanos = unixNanos
+        self.paths = paths
+        self.files = files
     }
 
     public static func setTime(_ date: Date) -> AgentMessage {
@@ -88,4 +94,40 @@ public struct AgentMessage: Codable, Equatable, Sendable {
     }
 
     public static let shutdown = AgentMessage(type: "shutdown")
+
+    /// Creates a `files` message carrying changes made on the Mac.
+    public static func files(_ events: [FileEvent]) -> AgentMessage {
+        AgentMessage(type: "files", files: events)
+    }
+}
+
+/// One change made on the Mac below a watched path. Mirrors `fileEvent` in
+/// vm/agent/fileevents.go.
+public struct FileEvent: Codable, Equatable, Sendable {
+    /// What happened to the path; raw values are wire strings.
+    public enum Op: String, Codable, Sendable {
+        /// Content or metadata changed.
+        case modified = "M"
+        /// Created, or renamed to this path.
+        case created = "C"
+        /// Deleted, or renamed away from this path.
+        case deleted = "D"
+    }
+
+    /// What happened.
+    public var op: Op
+    /// The absolute path, which is the same on the Mac and in the guest.
+    public var path: String
+    /// The file's modification time after the change; nil for a deletion.
+    public var mtimeNanos: Int64?
+    /// The file's size after the change; nil for a deletion.
+    public var size: Int64?
+
+    /// Creates an event; a deletion carries no mtime or size.
+    public init(op: Op, path: String, mtimeNanos: Int64? = nil, size: Int64? = nil) {
+        self.op = op
+        self.path = path
+        self.mtimeNanos = mtimeNanos
+        self.size = size
+    }
 }

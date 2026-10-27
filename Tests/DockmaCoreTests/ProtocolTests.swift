@@ -22,6 +22,23 @@ import Testing
     #expect(docker == AgentMessage(type: "docker", ready: true))
 }
 
+/// `watch` and `files` as vm/agent/control_test.go writes them.
+@Test func decodesFileEventMessages() throws {
+    let watch = try JSONDecoder().decode(AgentMessage.self, from: Data(#"{"type":"watch","paths":["/Users/me/src"]}"#.utf8))
+    #expect(watch == AgentMessage(type: "watch", paths: ["/Users/me/src"]))
+
+    let files = try JSONDecoder().decode(AgentMessage.self, from: Data(#"{"type":"files","files":[{"op":"M","path":"/Users/me/src/a","mtimeNanos":1,"size":2}]}"#.utf8))
+    #expect(files == .files([FileEvent(op: .modified, path: "/Users/me/src/a", mtimeNanos: 1, size: 2)]))
+}
+
+/// A deletion carries no mtime or size, which the agent's omitempty tags expect.
+@Test func encodesDeletionWithoutStat() throws {
+    let line = try jsonLine(FileEvent(op: .deleted, path: "/a"))
+    let object = try #require(JSONSerialization.jsonObject(with: line) as? [String: Any])
+    #expect(Set(object.keys) == ["op", "path"])
+    #expect(object["op"] as? String == "D")
+}
+
 /// `wait` is a wire string; an older daemon fails to decode it.
 @Test func encodesWaitRequest() throws {
     let line = try jsonLine(ControlRequest(command: .wait))

@@ -4,11 +4,49 @@ import (
 	"net"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 // Container is the subset of Docker's GET /containers/json item the agent uses.
 type Container struct {
-	Ports []ContainerPort `json:"Ports"`
+	Ports  []ContainerPort  `json:"Ports"`
+	Mounts []ContainerMount `json:"Mounts"`
+}
+
+// ContainerMount is one entry of a container's mount list.
+type ContainerMount struct {
+	Type   string `json:"Type"`
+	Source string `json:"Source"`
+}
+
+// WatchedPaths returns the sources of bind mounts on the home share, which
+// is mounted at share, sorted and without paths that lie below another one.
+// The host watches these for changes made on the Mac.
+func WatchedPaths(containers []Container, share string) []string {
+	if share == "" {
+		return nil
+	}
+	var paths []string
+	for _, c := range containers {
+		for _, m := range c.Mounts {
+			if m.Type == "bind" && (m.Source == share || strings.HasPrefix(m.Source, share+"/")) {
+				paths = append(paths, m.Source)
+			}
+		}
+	}
+	sort.Strings(paths)
+	var kept []string
+next:
+	for _, p := range paths {
+		// Not just the last kept path: "/a-c" sorts between "/a" and "/a/b".
+		for _, k := range kept {
+			if p == k || strings.HasPrefix(p, k+"/") {
+				continue next
+			}
+		}
+		kept = append(kept, p)
+	}
+	return kept
 }
 
 // ContainerPort is one entry of a container's port list.

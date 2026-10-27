@@ -74,7 +74,7 @@ docker run --rm -v "$HOME:$HOME" alpine sh -c "echo ok > '$marker'"
 [ "$(cat "$marker")" = ok ] || fail "file written in container not visible on host"
 rm -f "$marker"
 
-step "host file changes raise inotify events through /proc/fs/dockma-notify"
+step "changes on the Mac raise inotify events in containers"
 notify_dir="$HOME/.dockma-e2e-notify-$$"
 mkdir -p "$notify_dir/sub"
 echo old >"$notify_dir/preexisting"
@@ -98,19 +98,43 @@ expect_events() {
 	done
 	fail "$2: no '$1' in: $(take_events | tr '\n' ' ')"
 }
-echo new >"$notify_dir/a" && notify "C $notify_dir/a" || fail "notify C"
+# expect_quiet <what>: once late events have settled, nothing more arrives.
+expect_quiet() {
+	sleep 0.5
+	ev=$(take_events)
+	[ -z "$ev" ] || fail "$1: $(echo "$ev" | tr '\n' ' ')"
+}
+# The host watches the mount once the agent has seen the container; until then changes are missed.
+watching=
+for _ in $(seq 50); do
+	touch "$notify_dir/probe"
+	docker exec dockma-e2e-notify sh -c 'tr -d "\000" </tmp/ev' | grep -q probe && { watching=1; break; }
+	sleep 0.1
+done
+[ -n "$watching" ] || fail "no events for changes on the Mac: the host isn't watching $notify_dir (see daemon.log)"
+rm "$notify_dir/probe"
+expect_events '^DELETE probe$' "delete on the Mac"
+echo new >"$notify_dir/a"
 expect_events '^CREATE a$' "create on the Mac"
-echo changed >"$notify_dir/a" && notify "M $notify_dir/a" || fail "notify M"
+echo changed >"$notify_dir/a"
 expect_events '^MODIFY a$' "change on the Mac"
 [ "$(docker exec dockma-e2e-notify cat /n/a)" = changed ] || fail "container still reads the old content"
-rm "$notify_dir/preexisting" && notify "D $notify_dir/preexisting" || fail "notify D"
+rm "$notify_dir/preexisting"
 expect_events '^DELETE preexisting$' "delete of a file the container never opened"
-mkdir "$notify_dir/d" && notify "C $notify_dir/d" && rmdir "$notify_dir/d" && notify "D $notify_dir/d" || fail "notify directory"
+mkdir "$notify_dir/d"
+expect_events '^CREATE,ISDIR d$' "directory create on the Mac"
+rmdir "$notify_dir/d"
 expect_events '^DELETE,ISDIR d$' "directory delete on the Mac"
+# Drops late duplicates of the Mac's changes, which the echo checks below would count.
+sleep 0.5
+take_events >/dev/null
 docker exec dockma-e2e-notify mkdir /n/g && expect_events '^CREATE,ISDIR g$' "guest mkdir"
-notify "C $notify_dir/g" || fail "notify C echo"
-sleep 0.3
-[ -z "$(take_events)" ] || fail "the echo of the guest's own mkdir raised events"
+expect_quiet "the echo of the guest's own mkdir raised events"
+docker exec dockma-e2e-notify sh -c 'echo x >/n/w' && expect_events '^CLOSE_WRITE,CLOSE w$' "guest write"
+expect_quiet "the echo of the guest's own write raised events"
+# Quiet alone would pass if the Mac never reported the write; the agent logs its first dropped echo.
+grep -q "dropping the Mac's echoes of guest writes" "$DOCKMA_DIR/logs/console.log" ||
+	fail "the agent dropped no echo: the Mac never reported the guest's write, so the echo check proved nothing"
 notify "M $notify_dir/sub" && notify "M $notify_dir" || fail "notify M on directories"
 [ "$(docker exec dockma-e2e-notify cat /n/sub/marker)" = kept ] || fail "a notify detached the volume mounted over the share"
 # A path leading onto another filesystem is refused, not handled as virtio-fs.
