@@ -22,7 +22,8 @@ limactl create --name=bench --cpus=4 --memory=4 --vm-type=vz --mount-type=virtio
 orb config set cpu 4
 orb config set memory_mib 4096
 
-# Once, with network: builds the tools image, saves all images, fetches the git source, seeds the npm cache
+# Once, with network: builds the tools image, saves all images, fetches the git source, seeds the npm cache.
+# Again after any change to scripts/bench-fixtures/npm: a stale cache fails `npm ci --offline` in the mount suite.
 scripts/bench-compare.py --prepare
 ```
 
