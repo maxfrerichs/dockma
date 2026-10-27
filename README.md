@@ -200,7 +200,7 @@ dockma shell ► ~/.dockma/shell.sock  │                        │
             owns the VZVirtualMachine                         │
               ├─ unix socket → vsock 1024 ───────────────────►├─► /var/run/docker.sock
               ├─ control      ◄─ vsock 1025 (JSON lines) ─────┤◄─ dialled by the agent: Docker ready,
-              │                                               │   ports, time sync, shutdown
+              │                                               │   ports, file events, time sync, shutdown
               ├─ 127.0.0.1:P  → vsock 1026 (TCP/UDP tunnel) ─►├─► 127.0.0.1:P (docker-proxy)
               └─ shell.sock   → vsock 1027 (shell frames) ───►└─► /bin/sh on a pty or pipes
 
@@ -210,6 +210,8 @@ dockma shell ► ~/.dockma/shell.sock  │                        │
   virtio-blk data.img      → ext4 on /var/lib/docker
   virtio-net (NAT), virtio-rng, virtio-balloon, PL031 RTC
 ```
+
+For maintainers, [docs/architecture.md](docs/architecture.md) has the components and the main flows (start, ports, file events, stop, release) as diagrams, with links into the code.
 
 **Host (Swift).** A `VZVirtualMachine` lives only as long as its process, so `dockma start` installs a launchd job that runs `dockma daemon`. The daemon boots the VM, pipes `docker.sock` and `shell.sock` to the guest over vsock, accepts the agent's control connection, and mirrors the guest's published ports on the host. It watches the bind-mount sources the agent names with FSEvents and sends their changes to the guest.
 
