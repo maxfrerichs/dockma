@@ -1,7 +1,8 @@
 # Lints the workflows (actionlint, with .github/actionlint.yaml) and every
 # shell script: the installer, the dev scripts and the guest's boot scripts,
 # which run under busybox ash. Shellcheck fails on warnings, not on its
-# style notes.
+# style notes. Also checks that docs/architecture.md and docs/debugging.md link only to files
+# and symbols that exist, so renaming code can fail this workflow too.
 name: lint
 
 on:
@@ -11,9 +12,12 @@ on:
       - .github/**
       - install.sh
       - scripts/*.sh
-      - vm/rootfs/**
       - vm/kernel/*.sh
       - vm/tests/*.sh
+      - docs/**
+      - scripts/check-doc-refs.py
+      - Sources/**
+      - vm/**
   pull_request:
     paths: *paths
   workflow_dispatch:
@@ -38,3 +42,6 @@ jobs:
           install.sh scripts/*.sh vm/kernel/*.sh vm/tests/*.sh
           vm/rootfs/init vm/rootfs/etc/init.d/* vm/rootfs/etc/profile
           vm/rootfs/usr/libexec/* vm/rootfs/usr/share/udhcpc/default.script
+          vm/rootfs-debug/usr/libexec/*
+      - name: doc code links
+        run: python3 scripts/check-doc-refs.py --self-test && python3 scripts/check-doc-refs.py docs/architecture.md docs/debugging.md

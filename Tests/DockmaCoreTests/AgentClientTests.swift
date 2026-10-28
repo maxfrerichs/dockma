@@ -96,3 +96,18 @@ private func waitUntil(_ condition: () -> Bool, sourceLocation: SourceLocation =
     var byte: UInt8 = 0
     #expect(read(connection.agent, &byte, 1) == 0)
 }
+
+@MainActor
+@Test func agentWatchRequestsReachTheDaemon() async throws {
+    let client = AgentClient()
+    var watched: [[String]] = []
+    client.onWatch = { watched.append($0) }
+    let connection = try makeConnection()
+    client.accept(connection.host)
+    defer { close(connection.agent) }
+
+    send(#"{"type":"watch","paths":["/Users/me/src"]}"# + "\n" + #"{"type":"watch"}"# + "\n", to: connection.agent)
+    try await waitUntil { watched.count == 2 }
+    // omitempty drops an empty set; it means nothing to watch.
+    #expect(watched == [["/Users/me/src"], []])
+}

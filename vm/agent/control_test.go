@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/mdlayher/vsock"
+
+	"github.com/dockma/dockma/vm/agent/internal/logchange"
 )
 
 // The host (AgentMessage in Swift) decodes these exact shapes.
@@ -38,7 +40,7 @@ func TestHandleControlSendsChangesOnly(t *testing.T) {
 	w := newPortWatcher()
 	done := make(chan struct{})
 	go func() {
-		handleControl(agent, w)
+		handleControl(agent, w, nil)
 		close(done)
 	}()
 
@@ -64,6 +66,7 @@ func TestHandleControlSendsChangesOnly(t *testing.T) {
 		"hello",
 		`{"type":"docker","ready":false}`,
 		`{"type":"ports"}`, // omitempty drops an empty set; the host reads it as none
+		`{"type":"watch"}`,
 	} {
 		if got := next(); got != want {
 			t.Fatalf("got %s; want %s", got, want)
@@ -73,9 +76,17 @@ func TestHandleControlSendsChangesOnly(t *testing.T) {
 	if got, want := next(), `{"type":"docker","ready":true}`; got != want {
 		t.Fatalf("after ready: got %s; want %s", got, want)
 	}
-	w.publish([]ForwardedPort{{Port: 8080, Transport: "tcp", Target: "127.0.0.1:8080"}})
+	w.publish([]forwardedPort{{Port: 8080, Transport: "tcp", Target: "127.0.0.1:8080"}})
 	if got, want := next(), `{"type":"ports","ports":[{"port":8080,"transport":"tcp","target":"127.0.0.1:8080"}]}`; got != want {
 		t.Fatalf("after publish: got %s; want %s", got, want)
+	}
+	w.update(func(s *watcherState) { s.Watch = []string{"/Users/me/src"} })
+	if got, want := next(), `{"type":"watch","paths":["/Users/me/src"]}`; got != want {
+		t.Fatalf("after watch: got %s; want %s", got, want)
+	}
+	// A files batch from the host is dropped without a forwarder and answers nothing.
+	if _, err := host.Write([]byte(`{"type":"files","files":[{"op":"M","path":"/Users/me/src/a","mtimeNanos":1,"size":2}]}` + "\n")); err != nil {
+		t.Fatal(err)
 	}
 
 	host.Close()
@@ -104,12 +115,12 @@ func TestChangeLoggerSkipsRepeats(t *testing.T) {
 	var out bytes.Buffer
 	log.SetOutput(&out)
 	defer log.SetOutput(os.Stderr)
-	var errs changeLogger
-	errs.printf("fail %d", 1)
-	errs.printf("fail %d", 1)
-	errs.printf("fail %d", 2)
-	errs.reset()
-	errs.printf("fail %d", 2)
+	var errs logchange.Logger
+	errs.Printf("fail %d", 1)
+	errs.Printf("fail %d", 1)
+	errs.Printf("fail %d", 2)
+	errs.Reset()
+	errs.Printf("fail %d", 2)
 	if got := strings.Count(out.String(), "fail"); got != 3 {
 		t.Fatalf("logged %d lines, want 3:\n%s", got, out.String())
 	}

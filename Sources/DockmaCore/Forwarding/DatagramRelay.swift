@@ -2,7 +2,7 @@ import Foundation
 
 /// Datagram framing on a UDP tunnel connection (vsock port 1026 after a
 /// `udp <host:port>` header): `[len u16 BE][payload]` in both directions.
-/// Mirrors `writeDatagram` and `readDatagram` in vm/agent/udp.go.
+/// Mirrors `writeDatagram` and `readDatagram` in vm/agent/internal/relay/udp.go.
 public enum DatagramFrame {
     /// The largest payload a frame carries.
     public static let maxPayload = 0xffff

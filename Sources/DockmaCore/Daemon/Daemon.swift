@@ -24,6 +24,7 @@ public final class Daemon {
     private var host: VMHost?
     private var agent: AgentClient?
     private var ports: PortForwarder?
+    private var files: FileWatcher?
     private var listeners: [SocketListener] = []
     /// `wait` requests to answer once Docker is ready.
     private var readyWaiters: [ControlReply] = []
@@ -134,6 +135,16 @@ public final class Daemon {
         agent.onPorts = { [weak self] set in
             guard let self, !self.isStopRequested else { return }
             ports.update(set)
+        }
+        let files = FileWatcher(home: paths.home.path)
+        self.files = files
+        files.onChanges = { [weak self] events in
+            guard let self, !self.isStopRequested else { return }
+            self.agent?.send(.files(events))
+        }
+        agent.onWatch = { [weak self] requested in
+            guard let self, !self.isStopRequested else { return }
+            files.watch(requested)
         }
         agent.onConnect = { [weak self] in
             guard let self else { return }
@@ -279,6 +290,7 @@ public final class Daemon {
         // New connections are refused from here on; the agent connection
         // stays open to deliver the shutdown request.
         ports?.removeAll()
+        files?.stop()
         listeners.forEach { $0.cancel() }
         listeners.removeAll()
         closeReadyWaiters()
@@ -347,6 +359,7 @@ public final class Daemon {
 
     private func closeForwarding() {
         ports?.removeAll()
+        files?.stop()
         agent?.stop()
     }
 

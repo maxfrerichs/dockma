@@ -6,12 +6,12 @@ private func hex(_ data: Data) -> String {
     data.map { String(format: "%02x", $0) }.joined()
 }
 
-/// The same bytes are asserted in vm/agent/shell_test.go.
+/// The same bytes are asserted in vm/agent/internal/shell/shell_test.go.
 @Test func resizeFrameMatchesAgentGolden() throws {
     #expect(hex(try ShellFrame.resize(rows: 24, cols: 80).encode()) == "040000000400180050")
 }
 
-/// The same bytes are asserted in vm/agent/shell_test.go.
+/// The same bytes are asserted in vm/agent/internal/shell/shell_test.go.
 @Test func windowFrameMatchesAgentGolden() throws {
     #expect(hex(try ShellFrame.window(256 * 1024).encode()) == "150000000400040000")
 }

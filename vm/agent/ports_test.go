@@ -21,12 +21,12 @@ func TestPublishedPorts(t *testing.T) {
 	  ]},
 	  {"Ports": []}
 	]`
-	var containers []Container
+	var containers []container
 	if err := json.Unmarshal([]byte(fixture), &containers); err != nil {
 		t.Fatal(err)
 	}
-	got := PublishedPorts(containers)
-	want := []ForwardedPort{
+	got := publishedPorts(containers)
+	want := []forwardedPort{
 		{Port: 5353, Transport: "udp", Target: "127.0.0.1:5353"},
 		{Port: 5432, Transport: "tcp", Target: "127.0.0.1:5432"},
 		{Port: 8080, Transport: "tcp", Target: "127.0.0.1:8080"},
@@ -38,14 +38,14 @@ func TestPublishedPorts(t *testing.T) {
 }
 
 func TestPublishedPortsSamePortTCPAndUDP(t *testing.T) {
-	containers := []Container{{Ports: []ContainerPort{
+	containers := []container{{Ports: []containerPort{
 		{IP: "0.0.0.0", PublicPort: 53, Type: "udp"},
 		{IP: "::", PublicPort: 53, Type: "tcp"},
 		{IP: "0.0.0.0", PublicPort: 53, Type: "tcp"},
 		{IP: "::", PublicPort: 53, Type: "udp"},
 	}}}
-	got := PublishedPorts(containers)
-	want := []ForwardedPort{
+	got := publishedPorts(containers)
+	want := []forwardedPort{
 		{Port: 53, Transport: "tcp", Target: "127.0.0.1:53"},
 		{Port: 53, Transport: "udp", Target: "127.0.0.1:53"},
 	}
@@ -55,19 +55,49 @@ func TestPublishedPortsSamePortTCPAndUDP(t *testing.T) {
 }
 
 func TestPublishedPortsIPv6First(t *testing.T) {
-	containers := []Container{{Ports: []ContainerPort{
+	containers := []container{{Ports: []containerPort{
 		{IP: "::", PublicPort: 80, Type: "tcp"},
 		{IP: "0.0.0.0", PublicPort: 80, Type: "tcp"},
 	}}}
-	got := PublishedPorts(containers)
-	want := []ForwardedPort{{Port: 80, Transport: "tcp", Target: "127.0.0.1:80"}}
+	got := publishedPorts(containers)
+	want := []forwardedPort{{Port: 80, Transport: "tcp", Target: "127.0.0.1:80"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
 }
 
 func TestPublishedPortsEmpty(t *testing.T) {
-	if got := PublishedPorts(nil); len(got) != 0 {
+	if got := publishedPorts(nil); len(got) != 0 {
 		t.Fatalf("got %+v, want empty", got)
+	}
+}
+
+func TestWatchedPaths(t *testing.T) {
+	const fixture = `[
+	  {"Mounts": [
+	    {"Type": "bind", "Source": "/Users/me/src/app"},
+	    {"Type": "bind", "Source": "/Users/me/src/app/node_modules"},
+	    {"Type": "volume", "Source": "/var/lib/docker/volumes/v/_data"},
+	    {"Type": "bind", "Source": "/etc/hosts"}
+	  ]},
+	  {"Mounts": [
+	    {"Type": "bind", "Source": "/Users/me/src/app-two"},
+	    {"Type": "bind", "Source": "/Users/me/src/app"},
+	    {"Type": "bind", "Source": "/Users/meta/x"}
+	  ]},
+	  {"Mounts": []}
+	]`
+	var containers []container
+	if err := json.Unmarshal([]byte(fixture), &containers); err != nil {
+		t.Fatal(err)
+	}
+	got := watchedPaths(containers, "/Users/me")
+	// "/Users/me/src/app-two" sorts between "/Users/me/src/app" and its child.
+	want := []string{"/Users/me/src/app", "/Users/me/src/app-two"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if got := watchedPaths(containers, ""); got != nil {
+		t.Fatalf("without a share: got %q, want none", got)
 	}
 }

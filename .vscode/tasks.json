@@ -1,0 +1,84 @@
+{
+    // Tasks for the debug VM in ~/.dockma-debug; docs/debugging.md.
+    "version": "2.0.0",
+    "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "DOCKMA_HOME": "${userHome}/.dockma-debug" }
+    },
+    "tasks": [
+        {
+            "label": "make build",
+            "type": "shell",
+            "command": "make build",
+            "problemMatcher": "$swift",
+            "group": "build"
+        },
+        {
+            "label": "debug VM: build and install",
+            "detail": "Signed debug build, debug guest (Delve, tracing kernel) into ~/.dockma-debug",
+            "type": "shell",
+            "command": "make debug-vm",
+            "problemMatcher": []
+        },
+        {
+            "label": "debug VM: start",
+            "type": "shell",
+            "command": ".build/debug/dockma start",
+            "dependsOn": "make build",
+            "problemMatcher": []
+        },
+        {
+            "label": "debug VM: stop",
+            "type": "shell",
+            "command": ".build/debug/dockma stop",
+            "problemMatcher": []
+        },
+        {
+            "label": "debug VM: prepare foreground daemon",
+            "detail": "Build, then stop the launchd job, which would hold daemon.lock",
+            "dependsOn": ["make build", "debug VM: stop"],
+            "dependsOrder": "sequence",
+            "problemMatcher": []
+        },
+        {
+            "label": "debug VM: console log",
+            "type": "shell",
+            "command": ".build/debug/dockma logs -f",
+            "isBackground": true,
+            "problemMatcher": []
+        },
+        {
+            "label": "debug VM: daemon log",
+            "type": "shell",
+            "command": "tail -F \"$DOCKMA_HOME/logs/daemon.log\"",
+            "isBackground": true,
+            "problemMatcher": []
+        },
+        {
+            "label": "debug VM: shell",
+            "type": "shell",
+            "command": ".build/debug/dockma shell",
+            "problemMatcher": []
+        },
+        {
+            "label": "debug VM: guest IP",
+            "type": "shell",
+            "command": ".build/debug/dockma shell -- ip -4 -o addr show eth0",
+            "problemMatcher": []
+        },
+        {
+            "label": "debug VM: agent waits for debugger",
+            "detail": "Restarts the agent under Delve, stopped before main until a client continues it",
+            "type": "shell",
+            // Killing dlv ends the agent and this shell session; init respawns both.
+            "command": "touch \"$DOCKMA_HOME/agent-debug-wait\" && .build/debug/dockma shell -- killall dlv || true",
+            "problemMatcher": []
+        },
+        {
+            "label": "debug VM: agent runs at once",
+            "type": "shell",
+            "command": "rm -f \"$DOCKMA_HOME/agent-debug-wait\" && .build/debug/dockma shell -- killall dlv || true",
+            "problemMatcher": []
+        }
+    ]
+}

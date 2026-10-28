@@ -1,4 +1,4 @@
-package main
+package dns
 
 import (
 	"net"
@@ -124,8 +124,8 @@ func fakeUpstream(t *testing.T) string {
 	return addr
 }
 
-func testForwarder(upstreams ...string) *dnsForwarder {
-	return &dnsForwarder{
+func testForwarder(upstreams ...string) *Forwarder {
+	return &Forwarder{
 		gateway:   func() net.IP { return net.ParseIP("192.168.64.1") },
 		upstreams: func() []string { return upstreams },
 		allows:    func(net.IP) bool { return true },

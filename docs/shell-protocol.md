@@ -7,7 +7,7 @@ the code implements it. The two implementations are:
 - **Client (host, Swift):** `ShellFrame` and `ShellFrameDecoder` in
   `Sources/DockmaCore/Shell/ShellProtocol.swift`, driven by `ShellSession` in
   `Sources/DockmaCore/Shell/ShellSession.swift`.
-- **Server (guest, Go):** `handleShell` and `readInput` in `vm/agent/shell.go`.
+- **Server (guest, Go):** `Handle` and `readInput` in `vm/agent/internal/shell/shell.go` (package `shell`).
 
 Change both together, and update this document with them.
 
@@ -261,7 +261,7 @@ likely predates `dockma shell` (the guest image is older than the CLI).
 
 These bytes are asserted by both test suites
 (`Tests/DockmaCoreTests/ShellProtocolTests.swift` and
-`vm/agent/shell_test.go`):
+`vm/agent/internal/shell/shell_test.go`):
 
 | Frame | Hex |
 |-------|-----|
@@ -284,8 +284,8 @@ More examples, derived from the rules above:
 |---------|-------|----|
 | Frame types, encoding, decoding | `ShellFrame`, `ShellFrameDecoder` (`ShellProtocol.swift`) | constants, `readFrame`, `encodeFrame` (`shell.go`) |
 | `start` payload | `ShellStart` | `shellStart` |
-| Session driver | `ShellSession.run`, `receive`, `pumpStdin` | `handleShell`, `readInput` |
+| Session driver | `ShellSession.run`, `receive`, `pumpStdin` | `shell.Handle`, `readInput` |
 | Flow control | `ShellSession.takeCredit` | `stdinQueue`, `writeStdin`, `stdinWindow` |
 | Teardown timings | — | `outputDrainTimeout`, `hangupGrace` |
 | Daemon proxy | `VsockSocketProxy` | — |
-| Tests | `Tests/DockmaCoreTests/ShellProtocolTests.swift` | `vm/agent/shell_test.go` |
+| Tests | `Tests/DockmaCoreTests/ShellProtocolTests.swift` | `vm/agent/internal/shell/shell_test.go` |

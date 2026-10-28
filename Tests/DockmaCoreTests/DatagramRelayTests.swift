@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import DockmaCore
 
-/// The agent's TestDatagramFrameGolden (vm/agent/udp_test.go) asserts the
+/// The agent's TestDatagramFrameGolden (vm/agent/internal/relay/udp_test.go) asserts the
 /// same bytes.
 @Test func datagramFramesMatchTheAgent() throws {
     let bytes = DatagramFrame.encode(Data("hi!".utf8)) + DatagramFrame.encode(Data())

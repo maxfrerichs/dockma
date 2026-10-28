@@ -200,7 +200,7 @@ dockma shell ► ~/.dockma/shell.sock  │                        │
             owns the VZVirtualMachine                         │
               ├─ unix socket → vsock 1024 ───────────────────►├─► /var/run/docker.sock
               ├─ control      ◄─ vsock 1025 (JSON lines) ─────┤◄─ dialled by the agent: Docker ready,
-              │                                               │   ports, time sync, shutdown
+              │                                               │   ports, file events, time sync, shutdown
               ├─ 127.0.0.1:P  → vsock 1026 (TCP/UDP tunnel) ─►├─► 127.0.0.1:P (docker-proxy)
               └─ shell.sock   → vsock 1027 (shell frames) ───►└─► /bin/sh on a pty or pipes
 
@@ -211,7 +211,9 @@ dockma shell ► ~/.dockma/shell.sock  │                        │
   virtio-net (NAT), virtio-rng, virtio-balloon, PL031 RTC
 ```
 
-**Host (Swift).** A `VZVirtualMachine` lives only as long as its process, so `dockma start` installs a launchd job that runs `dockma daemon`. The daemon boots the VM, pipes `docker.sock` and `shell.sock` to the guest over vsock, accepts the agent's control connection, and mirrors the guest's published ports on the host.
+For maintainers, [docs/architecture.md](docs/architecture.md) has the components and the main flows (start, ports, file events, stop, release) as diagrams, with links into the code.
+
+**Host (Swift).** A `VZVirtualMachine` lives only as long as its process, so `dockma start` installs a launchd job that runs `dockma daemon`. The daemon boots the VM, pipes `docker.sock` and `shell.sock` to the guest over vsock, accepts the agent's control connection, and mirrors the guest's published ports on the host. It watches the bind-mount sources the agent names with FSEvents and sends their changes to the guest.
 
 - `start` waits on `control.sock`, woken by kqueue events. The daemon answers once the agent reports dockerd's API up; if the connection closes first, `start` shows the daemon's log.
 - `stop` unloads the job. The daemon asks the agent to power off and hard-stops the VM after 25 s (2 s without an agent).
@@ -224,7 +226,8 @@ dockma shell ► ~/.dockma/shell.sock  │                        │
 - **dockerd** uses `firewall-backend: nftables`, so the guest ships `nft`, not iptables. Its configuration is generated before each start from the baked `daemon.json`, yours, and dockma's defaults. The kernel also has what Docker-in-Docker, kind, k3s and k3d need in containers: iptables-nft for both address families, ipset, VXLAN, nfqueue and conntrack labels, plus `/dev/net/tun`. `/proc/config.gz` lists everything.
 - **`dockma-agent`** (Go):
   - proxies vsock to the Docker socket, and dials tunnelled TCP and UDP connections inside the VM;
-  - dials the host's control port and reports Docker readiness (waiting on inotify while dockerd is down) and published ports (from the Docker events API);
+  - dials the host's control port and reports Docker readiness (waiting on inotify while dockerd is down) and published ports (from the Docker events API), and names the bind-mount sources under home to watch;
+  - turns changes made on the Mac to those sources into inotify events in containers (`/proc/fs/dockma-notify`), dropping the echoes of the guest's own writes;
   - runs `dockma shell` sessions on a pty or pipes, with stdin flow control so signals never wait behind unread input;
   - steps the guest clock to the host's every 30 s, which fixes drift after the Mac sleeps;
   - serves DNS on port 10053, reached through an nftables redirect of the VM's port 53: it answers `host.docker.internal` itself and relays the rest to the DHCP lease's servers. Port 53 stays free for containers like Pi-hole; containers that query such a server at the VM's address reach the agent instead, so point them at it by name or container IP;
@@ -241,6 +244,7 @@ make test           # unit tests (Swift Testing)
 make e2e            # build, then scripts/e2e.sh against a real VM
 make guest          # rebuild the guest; also runs the agent's go vet and go test
 make install-guest  # copy the guest to $DOCKMA_HOME/guest (default ~/.dockma/guest)
+make debug-vm       # debug guest (Delve, tracing kernel) in ~/.dockma-debug; see docs/debugging.md
 make site           # build the website into site/public (needs Hugo); make site-serve previews it
 scripts/bench.sh          # boot phase breakdown; restarts the VM RUNS times (default 5)
 scripts/bench-compare.py  # dockma vs Lima vs OrbStack; see docs/benchmarks.md
@@ -248,7 +252,7 @@ scripts/bench-compare.py  # dockma vs Lima vs OrbStack; see docs/benchmarks.md
 
 `make e2e` runs against its own VM in `~/.dockma-e2e`, so yours keeps running; it still mounts your real home. That VM's guest is copied from `~/.dockma/guest` if missing; test a fresh build with `make guest install-guest DOCKMA_HOME=~/.dockma-e2e`. The suite pins `DOCKER_HOST` to dockma's socket and covers forwarding (TCP, UDP, held ports), `host.docker.internal`, bind mounts, Docker-in-Docker, Rosetta, `daemon.json`, persistence across restart and a graceful stop.
 
-To debug the daemon in the foreground: `dockma stop`, then `.build/debug/dockma daemon`, and Ctrl-C to stop it.
+To debug the daemon in the foreground: `dockma stop`, then `.build/debug/dockma daemon`, and Ctrl-C to stop it. For stepping through the daemon, the agent and the kernel hook against a separate VM, with VS Code configurations and guided tours, see [docs/debugging.md](docs/debugging.md).
 
 ### Layout
 
@@ -297,6 +301,7 @@ site/                 website (Hugo), deployed by .github/workflows/pages.yml
 - **Trust:**
   - Whatever can write the state directory controls the VM as root on the next boot, through `daemon.json`, `ca-certificates/` and `certs.d/`.
   - A privileged container, or one without seccomp, can open vsock and pose as the agent. Such a container controls the VM anyway.
+- **File events:** changes on the Mac fire inotify events only for bind mounts under home, and only while the agent is connected; changes made during a guest reboot are missed. A container's own delete raises a second `DELETE` when the Mac reports it back. If FSEvents drops events, or a burst of changes overflows the agent's queue, those changes raise none. At most 256 mounts are watched.
 - **Shell:** `dockma shell` needs a live agent. If the agent is dead, only `dockma restart` gets you in.
 - **GPU:** containers get no GPU acceleration. macOS 27 could carry a virtio-gpu device with Venus (Vulkan only), but dockma doesn't implement one. For GPU work, use a krunkit-based engine or run natively.
 - **Untested:** `--autostart`, `delete`, and home paths containing spaces.

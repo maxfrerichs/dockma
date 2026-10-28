@@ -1,24 +1,61 @@
 {
+    // Debugging against the debug VM in ~/.dockma-debug; docs/debugging.md.
+    // The binary must be signed (make build): a plain swift build strips the
+    // virtualization entitlement, and the daemon then can't boot a VM.
+    "version": "0.2.0",
     "configurations": [
         {
+            "name": "Daemon (debug VM)",
             "type": "swift",
             "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:dockma}",
-            "name": "Debug dockma",
-            "target": "dockma",
-            "configuration": "debug",
-            "preLaunchTask": "swift: Build Debug dockma"
+            "program": "${workspaceFolder}/.build/debug/dockma",
+            "args": ["daemon"],
+            "env": { "DOCKMA_HOME": "${userHome}/.dockma-debug" },
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "debug VM: prepare foreground daemon"
         },
         {
+            "name": "CLI (debug VM)",
             "type": "swift",
             "request": "launch",
-            "args": [],
-            "cwd": "${workspaceFolder:dockma}",
-            "name": "Release dockma",
-            "target": "dockma",
-            "configuration": "release",
-            "preLaunchTask": "swift: Build Release dockma"
+            "program": "${workspaceFolder}/.build/debug/dockma",
+            "args": ["${input:dockmaArgs}"],
+            "env": { "DOCKMA_HOME": "${userHome}/.dockma-debug" },
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "make build"
+        },
+        {
+            "name": "Attach to daemon (launchd)",
+            "type": "swift",
+            "request": "attach",
+            "program": "${workspaceFolder}/.build/debug/dockma",
+            "waitFor": true
+        },
+        {
+            "name": "Agent (Delve in the debug VM)",
+            "type": "go",
+            "request": "attach",
+            "mode": "remote",
+            "host": "${input:guestIP}",
+            "port": 2345,
+            // The agent is built with -trimpath: its files are named by module path.
+            "substitutePath": [
+                { "from": "${workspaceFolder}/vm/agent", "to": "github.com/dockma/dockma/vm/agent" }
+            ]
+        }
+    ],
+    "inputs": [
+        {
+            "id": "dockmaArgs",
+            "type": "promptString",
+            "description": "dockma subcommand (one word, e.g. start, status, stop)",
+            "default": "status"
+        },
+        {
+            "id": "guestIP",
+            "type": "promptString",
+            "description": "Debug VM address (task \"debug VM: guest IP\")",
+            "default": "192.168.64."
         }
     ]
 }

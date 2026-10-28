@@ -15,6 +15,8 @@ public final class AgentClient {
     public private(set) var isDockerReady = false
     public var isConnected: Bool { fd >= 0 }
     public var onPorts: (([ForwardedPort]) -> Void)?
+    /// Called with the bind-mount sources the agent wants watched for changes.
+    public var onWatch: (([String]) -> Void)?
     public var onConnect: (() -> Void)?
     /// Called when `isDockerReady` changes.
     public var onDockerReadyChange: ((Bool) -> Void)?
@@ -86,6 +88,8 @@ public final class AgentClient {
             setDockerReady(message.ready ?? false)
         case "ports":
             onPorts?(message.ports ?? [])
+        case "watch":
+            onWatch?(message.paths ?? [])
         default:
             Log.info("agent sent unknown message type \(message.type)")
         }

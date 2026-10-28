@@ -1,4 +1,4 @@
-package main
+package shell
 
 import (
 	"encoding/binary"
@@ -221,9 +221,9 @@ func copyFrames(fw *frameWriter, t byte, r io.Reader, done *sync.WaitGroup) {
 	}
 }
 
-// handleShell runs one session: a command (default: login shell) with a PTY
+// Handle runs one session: a command (default: login shell) with a PTY
 // or with plain pipes, driven by frames on c.
-func handleShell(c net.Conn) {
+func Handle(c net.Conn) {
 	defer c.Close()
 	fw := &frameWriter{w: c}
 
