@@ -1,4 +1,4 @@
-package main
+package fileevents
 
 import (
 	"testing"
@@ -40,7 +40,7 @@ func TestEchoFilterForgetsOldWrites(t *testing.T) {
 }
 
 func TestFileEventValid(t *testing.T) {
-	for e, want := range map[fileEvent]bool{
+	for e, want := range map[Event]bool{
 		{Op: "M", Path: "/Users/me/a"}:      true,
 		{Op: "C", Path: "/Users/me/a"}:      true,
 		{Op: "D", Path: "/Users/me/a"}:      true,
@@ -56,13 +56,13 @@ func TestFileEventValid(t *testing.T) {
 }
 
 func TestEnqueueDropsBatchesWhenTheQueueIsFull(t *testing.T) {
-	f := &fileForwarder{queue: make(chan []fileEvent, 1)}
-	batch := []fileEvent{{Op: "M", Path: "/Users/me/a"}}
-	if !f.enqueue(batch) {
+	f := &Forwarder{queue: make(chan []Event, 1)}
+	batch := []Event{{Op: "M", Path: "/Users/me/a"}}
+	if !f.Enqueue(batch) {
 		t.Fatal("the first batch did not fit")
 	}
 	// No worker drains the queue: the reader must not block.
-	if f.enqueue(batch) {
+	if f.Enqueue(batch) {
 		t.Fatal("a batch beyond the queue was accepted")
 	}
 }

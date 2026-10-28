@@ -1,4 +1,4 @@
-package main
+package shell
 
 import (
 	"bytes"
@@ -60,11 +60,11 @@ type sessionResult struct {
 	windowBeforeStarted bool
 }
 
-// runSession drives handleShell over an in-memory connection.
+// runSession drives Handle over an in-memory connection.
 func runSession(t *testing.T, start shellStart, input ...[]byte) sessionResult {
 	t.Helper()
 	client, server := net.Pipe()
-	go handleShell(server)
+	go Handle(server)
 	defer client.Close()
 	client.SetDeadline(time.Now().Add(10 * time.Second))
 
@@ -143,7 +143,7 @@ func TestSessionCommandNotFound(t *testing.T) {
 
 func TestSessionRejectsMissingStart(t *testing.T) {
 	client, server := net.Pipe()
-	go handleShell(server)
+	go Handle(server)
 	defer client.Close()
 	client.SetDeadline(time.Now().Add(5 * time.Second))
 	go client.Write(encodeFrame(frameStdin, []byte("x")))

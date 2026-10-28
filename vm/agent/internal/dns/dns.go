@@ -1,4 +1,4 @@
-package main
+package dns
 
 import (
 	"encoding/binary"
@@ -13,6 +13,9 @@ import (
 
 	"golang.org/x/net/dns/dnsmessage"
 	"golang.org/x/net/ipv4"
+
+	"github.com/dockma/dockma/vm/agent/internal/lease"
+	"github.com/dockma/dockma/vm/agent/internal/logchange"
 )
 
 // The DNS forwarder answers host.docker.internal and gateway.docker.internal
@@ -47,7 +50,7 @@ const (
 // hostNames resolve to the Mac.
 var hostNames = []string{"host.docker.internal.", "gateway.docker.internal."}
 
-type dnsForwarder struct {
+type Forwarder struct {
 	// gateway returns the Mac's address, or nil if unknown.
 	gateway func() net.IP
 	// upstreams returns the servers to relay to, as host:port.
@@ -64,10 +67,10 @@ type dnsForwarder struct {
 	preferred string
 }
 
-func newDNSForwarder() *dnsForwarder {
+func NewForwarder() *Forwarder {
 	filter := &clientFilter{lookup: eth0Networks}
-	f := &dnsForwarder{
-		gateway:  func() net.IP { return readIP(gatewayFile) },
+	f := &Forwarder{
+		gateway:  func() net.IP { return lease.ReadIP(gatewayFile) },
 		allows:   filter.allows,
 		timeout:  upstreamTimeout,
 		slots:    make(chan struct{}, maxDNSInFlight),
@@ -90,19 +93,6 @@ func newDNSForwarder() *dnsForwarder {
 		return servers
 	}
 	return f
-}
-
-// readIP reads an IP address from the first field of path; nil if missing.
-func readIP(path string) net.IP {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	fields := strings.Fields(string(data))
-	if len(fields) == 0 {
-		return nil
-	}
-	return net.ParseIP(fields[0])
 }
 
 // clientFilter admits queries from the VM itself and its containers, and
@@ -154,35 +144,35 @@ func eth0Networks() []*net.IPNet {
 	return nets
 }
 
-// serveDNS serves UDP and TCP on dnsListenAddress until the process exits,
+// Serve serves UDP and TCP on dnsListenAddress until the process exits,
 // binding again after a failure. A bind that keeps failing (a container
 // holding the port) is logged once, not every second.
-func serveDNS(f *dnsForwarder) {
+func Serve(f *Forwarder) {
 	go func() {
-		var errs changeLogger
+		var errs logchange.Logger
 		for {
 			pc, err := net.ListenPacket("udp4", dnsListenAddress)
 			if err != nil {
-				errs.printf("dns: listen udp: %v", err)
+				errs.Printf("dns: listen udp: %v", err)
 				time.Sleep(time.Second)
 				continue
 			}
-			errs.reset()
+			errs.Reset()
 			f.serveUDP(pc)
 			pc.Close()
 			// A socket that fails right away mustn't spin.
 			time.Sleep(time.Second)
 		}
 	}()
-	var errs changeLogger
+	var errs logchange.Logger
 	for {
 		l, err := net.Listen("tcp4", dnsListenAddress)
 		if err != nil {
-			errs.printf("dns: listen tcp: %v", err)
+			errs.Printf("dns: listen tcp: %v", err)
 			time.Sleep(time.Second)
 			continue
 		}
-		errs.reset()
+		errs.Reset()
 		for {
 			c, err := l.Accept()
 			if err != nil {
@@ -209,7 +199,7 @@ func serveDNS(f *dnsForwarder) {
 // would otherwise pick the source by route (docker0's address for a container
 // that asked the VM's eth0 address), and resolvers drop replies from an
 // address they didn't ask.
-func (f *dnsForwarder) serveUDP(pc net.PacketConn) {
+func (f *Forwarder) serveUDP(pc net.PacketConn) {
 	p := ipv4.NewPacketConn(pc)
 	if err := p.SetControlMessage(ipv4.FlagDst, true); err != nil {
 		log.Printf("dns: %v", err)
@@ -247,7 +237,7 @@ func (f *dnsForwarder) serveUDP(pc net.PacketConn) {
 
 // serveTCP answers length-prefixed queries on c until the client closes it
 // or stays idle.
-func (f *dnsForwarder) serveTCP(c net.Conn) {
+func (f *Forwarder) serveTCP(c net.Conn) {
 	defer c.Close()
 	if addr, ok := c.RemoteAddr().(*net.TCPAddr); ok && !f.allows(addr.IP) {
 		return
@@ -273,7 +263,7 @@ func (f *dnsForwarder) serveTCP(c net.Conn) {
 // answer returns the reply to query: a local answer for the host names,
 // otherwise the upstream's reply, or SERVFAIL when no upstream answered.
 // Nil for a message that isn't a query.
-func (f *dnsForwarder) answer(query []byte, overTCP bool) []byte {
+func (f *Forwarder) answer(query []byte, overTCP bool) []byte {
 	if reply, ok := localAnswer(query, f.gateway()); ok {
 		return reply
 	}
@@ -373,7 +363,7 @@ func serverFailure(query []byte) []byte {
 
 // orderedUpstreams returns the upstreams with the one that answered last
 // first, so a dead first server costs one timeout once, not on every query.
-func (f *dnsForwarder) orderedUpstreams() []string {
+func (f *Forwarder) orderedUpstreams() []string {
 	servers := f.upstreams()
 	f.mu.Lock()
 	preferred := f.preferred
@@ -388,7 +378,7 @@ func (f *dnsForwarder) orderedUpstreams() []string {
 }
 
 // answered records server as the upstream to try first.
-func (f *dnsForwarder) answered(server string) {
+func (f *Forwarder) answered(server string) {
 	f.mu.Lock()
 	f.preferred = server
 	f.mu.Unlock()
@@ -396,7 +386,7 @@ func (f *dnsForwarder) answered(server string) {
 
 // exchangeUDP sends query to each upstream in turn and returns the first
 // reply with the query's ID.
-func (f *dnsForwarder) exchangeUDP(query []byte) ([]byte, error) {
+func (f *Forwarder) exchangeUDP(query []byte) ([]byte, error) {
 	err := errors.New("no upstream DNS server")
 	for _, server := range f.orderedUpstreams() {
 		var reply []byte
@@ -409,7 +399,7 @@ func (f *dnsForwarder) exchangeUDP(query []byte) ([]byte, error) {
 	return nil, err
 }
 
-func (f *dnsForwarder) exchangeUDPWith(server string, query []byte) ([]byte, error) {
+func (f *Forwarder) exchangeUDPWith(server string, query []byte) ([]byte, error) {
 	c, err := net.DialTimeout("udp", server, f.timeout)
 	if err != nil {
 		return nil, err
@@ -434,7 +424,7 @@ func (f *dnsForwarder) exchangeUDPWith(server string, query []byte) ([]byte, err
 
 // exchangeTCP relays query over TCP to the first upstream that accepts a
 // connection, and over UDP if none does.
-func (f *dnsForwarder) exchangeTCP(query []byte) ([]byte, error) {
+func (f *Forwarder) exchangeTCP(query []byte) ([]byte, error) {
 	for _, server := range f.orderedUpstreams() {
 		c, err := net.DialTimeout("tcp", server, f.timeout)
 		if err != nil {

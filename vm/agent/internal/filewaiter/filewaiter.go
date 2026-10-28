@@ -1,4 +1,4 @@
-package main
+package filewaiter
 
 import (
 	"encoding/binary"
@@ -10,15 +10,15 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// fileWaiter wakes when a file with a given name appears in a directory, via
+// Waiter wakes when a file with a given name appears in a directory, via
 // inotify. Arm it before checking for the file, so a file created in between
 // is not missed.
-type fileWaiter struct {
+type Waiter struct {
 	file *os.File
 	name string
 }
 
-func newFileWaiter(dir, name string) (*fileWaiter, error) {
+func New(dir, name string) (*Waiter, error) {
 	fd, err := unix.InotifyInit1(unix.IN_CLOEXEC | unix.IN_NONBLOCK)
 	if err != nil {
 		return nil, fmt.Errorf("inotify: %w", err)
@@ -28,12 +28,12 @@ func newFileWaiter(dir, name string) (*fileWaiter, error) {
 		return nil, fmt.Errorf("inotify watch %s: %w", dir, err)
 	}
 	// A non-blocking descriptor gives a pollable File, so deadlines work.
-	return &fileWaiter{file: os.NewFile(uintptr(fd), "inotify"), name: name}, nil
+	return &Waiter{file: os.NewFile(uintptr(fd), "inotify"), name: name}, nil
 }
 
-// wait blocks until the file appears or timeout passes, and reports whether
+// Wait blocks until the file appears or timeout passes, and reports whether
 // it appeared.
-func (w *fileWaiter) wait(timeout time.Duration) bool {
+func (w *Waiter) Wait(timeout time.Duration) bool {
 	w.file.SetReadDeadline(time.Now().Add(timeout))
 	buf := make([]byte, 4096)
 	for {
@@ -49,7 +49,7 @@ func (w *fileWaiter) wait(timeout time.Duration) bool {
 	}
 }
 
-func (w *fileWaiter) close() {
+func (w *Waiter) Close() {
 	w.file.Close()
 }
 

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/mdlayher/vsock"
+
+	"github.com/dockma/dockma/vm/agent/internal/logchange"
 )
 
 // The host (AgentMessage in Swift) decodes these exact shapes.
@@ -74,7 +76,7 @@ func TestHandleControlSendsChangesOnly(t *testing.T) {
 	if got, want := next(), `{"type":"docker","ready":true}`; got != want {
 		t.Fatalf("after ready: got %s; want %s", got, want)
 	}
-	w.publish([]ForwardedPort{{Port: 8080, Transport: "tcp", Target: "127.0.0.1:8080"}})
+	w.publish([]forwardedPort{{Port: 8080, Transport: "tcp", Target: "127.0.0.1:8080"}})
 	if got, want := next(), `{"type":"ports","ports":[{"port":8080,"transport":"tcp","target":"127.0.0.1:8080"}]}`; got != want {
 		t.Fatalf("after publish: got %s; want %s", got, want)
 	}
@@ -113,12 +115,12 @@ func TestChangeLoggerSkipsRepeats(t *testing.T) {
 	var out bytes.Buffer
 	log.SetOutput(&out)
 	defer log.SetOutput(os.Stderr)
-	var errs changeLogger
-	errs.printf("fail %d", 1)
-	errs.printf("fail %d", 1)
-	errs.printf("fail %d", 2)
-	errs.reset()
-	errs.printf("fail %d", 2)
+	var errs logchange.Logger
+	errs.Printf("fail %d", 1)
+	errs.Printf("fail %d", 1)
+	errs.Printf("fail %d", 2)
+	errs.Reset()
+	errs.Printf("fail %d", 2)
 	if got := strings.Count(out.String(), "fail"); got != 3 {
 		t.Fatalf("logged %d lines, want 3:\n%s", got, out.String())
 	}

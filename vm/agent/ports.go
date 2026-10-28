@@ -7,22 +7,22 @@ import (
 	"strings"
 )
 
-// Container is the subset of Docker's GET /containers/json item the agent uses.
-type Container struct {
-	Ports  []ContainerPort  `json:"Ports"`
-	Mounts []ContainerMount `json:"Mounts"`
+// container is the subset of Docker's GET /containers/json item the agent uses.
+type container struct {
+	Ports  []containerPort  `json:"Ports"`
+	Mounts []containerMount `json:"Mounts"`
 }
 
-// ContainerMount is one entry of a container's mount list.
-type ContainerMount struct {
+// containerMount is one entry of a container's mount list.
+type containerMount struct {
 	Type   string `json:"Type"`
 	Source string `json:"Source"`
 }
 
-// WatchedPaths returns the sources of bind mounts on the home share, which
+// watchedPaths returns the sources of bind mounts on the home share, which
 // is mounted at share, sorted and without paths that lie below another one.
 // The host watches these for changes made on the Mac.
-func WatchedPaths(containers []Container, share string) []string {
+func watchedPaths(containers []container, share string) []string {
 	if share == "" {
 		return nil
 	}
@@ -49,17 +49,17 @@ next:
 	return kept
 }
 
-// ContainerPort is one entry of a container's port list.
-type ContainerPort struct {
+// containerPort is one entry of a container's port list.
+type containerPort struct {
 	IP          string `json:"IP"`
 	PrivatePort int    `json:"PrivatePort"`
 	PublicPort  int    `json:"PublicPort"`
 	Type        string `json:"Type"`
 }
 
-// ForwardedPort is a published TCP or UDP port the host should listen on.
+// forwardedPort is a published TCP or UDP port the host should listen on.
 // Target is the guest address the agent dials for a tunnelled connection.
-type ForwardedPort struct {
+type forwardedPort struct {
 	Port      int    `json:"port"`
 	Transport string `json:"transport"`
 	Target    string `json:"target"`
@@ -72,11 +72,11 @@ type portKey struct {
 	transport string
 }
 
-// PublishedPorts returns one entry per published TCP or UDP host port, sorted
+// publishedPorts returns one entry per published TCP or UDP host port, sorted
 // by port and then transport. Other transports (sctp) are skipped. Wildcard
 // bindings are dialled via loopback, where docker-proxy also listens; an IPv4
 // target wins over IPv6 when both exist for a port.
-func PublishedPorts(containers []Container) []ForwardedPort {
+func publishedPorts(containers []container) []forwardedPort {
 	byKey := map[portKey]string{}
 	for _, c := range containers {
 		for _, p := range c.Ports {
@@ -91,9 +91,9 @@ func PublishedPorts(containers []Container) []ForwardedPort {
 			byKey[key] = host
 		}
 	}
-	ports := make([]ForwardedPort, 0, len(byKey))
+	ports := make([]forwardedPort, 0, len(byKey))
 	for key, host := range byKey {
-		ports = append(ports, ForwardedPort{
+		ports = append(ports, forwardedPort{
 			Port:      key.port,
 			Transport: key.transport,
 			Target:    net.JoinHostPort(host, strconv.Itoa(key.port)),

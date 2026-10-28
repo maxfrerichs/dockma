@@ -59,10 +59,10 @@ The CLI and the daemon are two processes, so this tour has two parts. Start each
 | 2 | [`KernelCmdline.commandLine`](../Sources/DockmaCore/VM/KernelCmdline.swift) | The guest's command line: `dockma.home=`, `dockma.state=`, `panic=5`. |
 | 3 | [`Daemon.vmStarted`](../Sources/DockmaCore/Daemon/Daemon.swift) | The Docker and shell sockets are served before the agent connects. |
 | 4 | [`main`](../vm/agent/main.go) (agent) | With the wait file, Delve holds the agent here. Its servers start before it dials the host. |
-| 5 | [`handleControl`](../vm/agent/main.go) (agent) | The first messages: `hello`, then `docker`, `ports`, `watch` from the first snapshot. |
+| 5 | [`handleControl`](../vm/agent/control.go) (agent) | The first messages: `hello`, then `docker`, `ports`, `watch` from the first snapshot. |
 | 6 | [`AgentClient.accept`](../Sources/DockmaCore/Agent/AgentClient.swift) | The agent dialed in; a reader thread per connection. |
 | 7 | [`AgentClient.handle`](../Sources/DockmaCore/Agent/AgentClient.swift) | `message.type` for each line; `sender == fd` drops a replaced connection's late lines. |
-| 8 | [`portWatcher.setDockerReady`](../vm/agent/main.go) (agent) | Readiness flips once the `/events` stream opens. |
+| 8 | [`portWatcher.setDockerReady`](../vm/agent/portwatcher.go) (agent) | Readiness flips once the `/events` stream opens. |
 | 9 | [`Daemon.answerReadyWaiters`](../Sources/DockmaCore/Daemon/Daemon.swift) | Answers each pending `wait`. Under the foreground daemon nobody waits, so `readyWaiters` is empty; in the CLI part it holds the CLI's request. |
 
 ### A published port
@@ -71,14 +71,14 @@ Trigger: `DOCKER_HOST=unix://$HOME/.dockma-debug/docker.sock docker run -d -p 80
 
 | Stop | Where | Look at |
 |---|---|---|
-| 1 | [`portWatcher.relist`](../vm/agent/main.go) (agent) | `containers`: Docker's list, with ports and mounts. |
-| 2 | [`PublishedPorts`](../vm/agent/ports.go) (agent) | Which ports become forwards, and their guest `target`. |
-| 3 | [`portWatcher.update`](../vm/agent/main.go) (agent) | Only a change reaches subscribers; `handleControl` then sends `ports`. |
+| 1 | [`portWatcher.relist`](../vm/agent/portwatcher.go) (agent) | `containers`: Docker's list, with ports and mounts. |
+| 2 | [`publishedPorts`](../vm/agent/ports.go) (agent) | Which ports become forwards, and their guest `target`. |
+| 3 | [`portWatcher.update`](../vm/agent/portwatcher.go) (agent) | Only a change reaches subscribers; `handleControl` then sends `ports`. |
 | 4 | [`PortForwarder.update`](../Sources/DockmaCore/Forwarding/PortForwarder.swift) | `plan.toOpen` and `plan.toClose` from [`PortForwarder.plan`](../Sources/DockmaCore/Forwarding/PortForwarder.swift). |
 | 5 | [`PortForwarder.tunnel`](../Sources/DockmaCore/Forwarding/PortForwarder.swift) | On `curl`: a fresh vsock connection and the `tcp <target>` line. |
-| 6 | [`handleTunnel`](../vm/agent/main.go) (agent) | `network` and `target` from [`parseTunnelHeader`](../vm/agent/main.go), then the dial to docker-proxy. |
+| 6 | [`relay.HandleTunnel`](../vm/agent/internal/relay/tunnel.go) (agent) | `network` and `target` from [`parseTunnelHeader`](../vm/agent/internal/relay/tunnel.go), then the dial to docker-proxy. |
 
-For UDP, use `-p 5353:5353/udp` and stop in [`DatagramRelay`](../Sources/DockmaCore/Forwarding/DatagramRelay.swift) and [`relayUDP`](../vm/agent/udp.go).
+For UDP, use `-p 5353:5353/udp` and stop in [`DatagramRelay`](../Sources/DockmaCore/Forwarding/DatagramRelay.swift) and [`relayUDP`](../vm/agent/internal/relay/udp.go).
 
 ### File changes on the Mac
 
@@ -86,12 +86,12 @@ Trigger: run a container that bind-mounts a directory under your home and watche
 
 | Stop | Where | Look at |
 |---|---|---|
-| 1 | [`WatchedPaths`](../vm/agent/ports.go) (agent) | The bind sources under home that the agent asks for. |
+| 1 | [`watchedPaths`](../vm/agent/ports.go) (agent) | The bind sources under home that the agent asks for. |
 | 2 | [`FileWatcher.watch`](../Sources/DockmaCore/Agent/FileWatcher.swift) | `requested` against what [`FileWatcher.allowedPaths`](../Sources/DockmaCore/Agent/FileWatcher.swift) keeps. |
 | 3 | [`FileWatcher.event`](../Sources/DockmaCore/Agent/FileWatcher.swift) | On the edit: `flags` and `status`; whether it becomes C, M or D. Runs on the watcher's queue, not the main actor. A plain edit to a file created moments before can still carry `ItemCreated`, because FSEvents keeps a file's earlier flags; it becomes C plus M, and the hook raises no second CREATE (`inode already known` in `dmesg`). |
-| 4 | [`fileForwarder.enqueue`](../vm/agent/fileevents.go) (agent) | The batch arrives in the control reader and only queues. |
-| 5 | [`fileForwarder.apply`](../vm/agent/fileevents.go) (agent) | The worker: C first, then the echo check, then M. |
-| 6 | [`fileForwarder.isEcho`](../vm/agent/fileevents.go) (agent) | Write the file from inside the container instead: the Mac's echo matches the guest's own write. |
+| 4 | [`Forwarder.Enqueue`](../vm/agent/internal/fileevents/fileevents.go) (agent) | The batch arrives in the control reader and only queues. |
+| 5 | [`Forwarder.apply`](../vm/agent/internal/fileevents/fileevents.go) (agent) | The worker: C first, then the echo check, then M. |
+| 6 | [`Forwarder.isEcho`](../vm/agent/internal/fileevents/fileevents.go) (agent) | Write the file from inside the container instead: the Mac's echo matches the guest's own write. |
 
 The kernel side has no debugger. In a shell in the debug VM (`dockma shell`):
 
@@ -120,7 +120,7 @@ Trigger: with the daemon under **Daemon (debug VM)**, run the task **debug VM: s
 | 1 | [`Daemon.handle`](../Sources/DockmaCore/Daemon/Daemon.swift) | `.stop`: the reply is written before `requestStop` runs. |
 | 2 | [`Daemon.requestStop`](../Sources/DockmaCore/Daemon/Daemon.swift) | Forwards and listeners close; `isShutdownSent` picks the deadline. |
 | 3 | [`Daemon.forceStopDeadline`](../Sources/DockmaCore/Daemon/Daemon.swift) | 25 s after the request with an agent, 2 s without. |
-| 4 | [`handleControl`](../vm/agent/main.go) (agent) | `shutdown` runs `poweroff`; init then runs [`shutdown`](../vm/rootfs/etc/init.d/shutdown). |
+| 4 | [`handleControl`](../vm/agent/control.go) (agent) | `shutdown` runs `poweroff`; init then runs [`shutdown`](../vm/rootfs/etc/init.d/shutdown). |
 | 5 | [`Daemon.vmStopped`](../Sources/DockmaCore/Daemon/Daemon.swift) | `error` and `isStopRequested` decide the exit code ([`Daemon.exitCode`](../Sources/DockmaCore/Daemon/Daemon.swift)). |
 
 To see the hard stop, pause the agent at stop 4 for more than 25 s, then continue the daemon.

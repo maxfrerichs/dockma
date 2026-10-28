@@ -121,13 +121,13 @@ flowchart TB
   dockerdinit["init.d/dockerd:<br/>dockma-agent daemon-config, dockerd"]
   shutdown["init.d/shutdown"]
   subgraph agentproc["dockma-agent goroutines"]
-    serveDocker["serve 1024: proxy"]
-    serveTunnel["serve 1026: handleTunnel"]
-    serveShell["serve 1027: handleShell"]
+    serveDocker["serve 1024: relay.Proxy"]
+    serveTunnel["serve 1026: relay.HandleTunnel"]
+    serveShell["serve 1027: shell.Handle"]
     control["dialControl, handleControl"]
     watcher["portWatcher: events, relist"]
-    dns["serveDNS on 10053"]
-    fileq["fileForwarder queue and worker"]
+    dns["dns.Serve on 10053"]
+    fileq["fileevents.Forwarder queue and worker"]
     echo["echoFilter: fanotify"]
     trim["trimDataDisk"]
   end
@@ -149,15 +149,15 @@ flowchart TB
 | boot | [`cmdline_path`](../vm/rootfs/etc/init.d/rcS) | Decodes `dockma.home=` and `dockma.state=` from the cmdline built by [`KernelCmdline.commandLine`](../Sources/DockmaCore/VM/KernelCmdline.swift). |
 | data disk | [`dockma-disk`](../vm/rootfs/usr/libexec/dockma-disk) | Formats only a blank disk; checks and grows an existing one. |
 | network | [`default.script`](../vm/rootfs/usr/share/udhcpc/default.script) | DHCP lease, `resolv.conf`, the nft redirect of port 53 to the agent. |
-| dockerd | [`dockerd`](../vm/rootfs/etc/init.d/dockerd) | Generates and validates the config with [`runDaemonConfig`](../vm/agent/daemonconfig.go), then execs dockerd. |
-| Docker proxy | [`proxy`](../vm/agent/main.go) | Served by [`serve`](../vm/agent/main.go), which admits only the host ([`isHostPeer`](../vm/agent/main.go)). |
-| tunnels | [`handleTunnel`](../vm/agent/main.go) | Reads `tcp\|udp <host:port>`; UDP goes to [`relayUDP`](../vm/agent/udp.go). |
-| shell | [`handleShell`](../vm/agent/shell.go) | Sessions on a pty or pipes. |
-| control | [`handleControl`](../vm/agent/main.go) | Sends `hello`, `docker`, `ports`, `watch`; applies `settime`, `files`, `shutdown`. Redialed by [`dialControl`](../vm/agent/main.go). |
-| container watcher | [`portWatcher.relist`](../vm/agent/main.go) | Docker events → [`PublishedPorts`](../vm/agent/ports.go) and [`WatchedPaths`](../vm/agent/ports.go). |
-| DNS | [`serveDNS`](../vm/agent/dns.go) | `host.docker.internal`, relay to the lease's servers. |
-| file events | [`fileForwarder.enqueue`](../vm/agent/fileevents.go) | Bounded queue; the worker runs [`fileForwarder.apply`](../vm/agent/fileevents.go). |
-| echo filter | [`echoFilter.recordGuestWrites`](../vm/agent/fileevents.go) | Records the guest's own writes, so the Mac's echoes of them are dropped. |
+| dockerd | [`dockerd`](../vm/rootfs/etc/init.d/dockerd) | Generates and validates the config with [`daemonconfig.Run`](../vm/agent/internal/daemonconfig/daemonconfig.go), then execs dockerd. |
+| Docker proxy | [`relay.Proxy`](../vm/agent/internal/relay/relay.go) | Served by [`serve`](../vm/agent/serve.go), which admits only the host ([`isHostPeer`](../vm/agent/serve.go)). |
+| tunnels | [`relay.HandleTunnel`](../vm/agent/internal/relay/tunnel.go) | Reads `tcp\|udp <host:port>`; UDP goes to [`relayUDP`](../vm/agent/internal/relay/udp.go). |
+| shell | [`shell.Handle`](../vm/agent/internal/shell/shell.go) | Sessions on a pty or pipes. |
+| control | [`handleControl`](../vm/agent/control.go) | Sends `hello`, `docker`, `ports`, `watch`; applies `settime`, `files`, `shutdown`. Redialed by [`dialControl`](../vm/agent/control.go). |
+| container watcher | [`portWatcher.relist`](../vm/agent/portwatcher.go) | Docker events → [`publishedPorts`](../vm/agent/ports.go) and [`watchedPaths`](../vm/agent/ports.go). |
+| DNS | [`dns.Serve`](../vm/agent/internal/dns/dns.go) | `host.docker.internal`, relay to the lease's servers. |
+| file events | [`Forwarder.Enqueue`](../vm/agent/internal/fileevents/fileevents.go) | Bounded queue; the worker runs [`Forwarder.apply`](../vm/agent/internal/fileevents/fileevents.go). |
+| echo filter | [`echoFilter.recordGuestWrites`](../vm/agent/internal/fileevents/fileevents.go) | Records the guest's own writes, so the Mac's echoes of them are dropped. |
 | kernel hook | [`dn_write`](../vm/kernel/dockma_notify.c) | `/proc/fs/dockma-notify`; [`dn_apply`](../vm/kernel/dockma_notify.c) invalidates and raises events. |
 | shutdown | [`shutdown`](../vm/rootfs/etc/init.d/shutdown) | Stops dockerd, then unmounts the data disk. |
 
@@ -197,8 +197,8 @@ sequenceDiagram
 | job | [`Start.loadJob`](../Sources/DockmaCLI/Dockma.swift) → [`LaunchAgent.install`](../Sources/DockmaCore/Daemon/LaunchAgent.swift) |
 | waiting for the socket | [`Start.connectToDaemon`](../Sources/DockmaCLI/Dockma.swift), [`KernelEvents`](../Sources/DockmaCore/Support/KernelEvents.swift) |
 | daemon start | [`Daemon.start`](../Sources/DockmaCore/Daemon/Daemon.swift) → [`Daemon.boot`](../Sources/DockmaCore/Daemon/Daemon.swift) → [`Daemon.vmStarted`](../Sources/DockmaCore/Daemon/Daemon.swift) |
-| agent connects | [`dialControl`](../vm/agent/main.go) → [`AgentClient.accept`](../Sources/DockmaCore/Agent/AgentClient.swift); `onConnect` in `Daemon.boot` sends `settime` |
-| Docker readiness | [`fileWaiter.wait`](../vm/agent/filewaiter.go), then [`portWatcher.watch`](../vm/agent/main.go) calls [`portWatcher.setDockerReady`](../vm/agent/main.go) once the stream opens → [`Daemon.answerReadyWaiters`](../Sources/DockmaCore/Daemon/Daemon.swift) |
+| agent connects | [`dialControl`](../vm/agent/control.go) → [`AgentClient.accept`](../Sources/DockmaCore/Agent/AgentClient.swift); `onConnect` in `Daemon.boot` sends `settime` |
+| Docker readiness | [`Waiter.Wait`](../vm/agent/internal/filewaiter/filewaiter.go), then [`portWatcher.watch`](../vm/agent/portwatcher.go) calls [`portWatcher.setDockerReady`](../vm/agent/portwatcher.go) once the stream opens → [`Daemon.answerReadyWaiters`](../Sources/DockmaCore/Daemon/Daemon.swift) |
 | final check | [`DockerPing.isResponding`](../Sources/DockmaCore/Daemon/ControlProtocol.swift) |
 
 A daemon that fails during startup exits 0, so launchd doesn't loop. `start` sees the control connection close or the process exit, and prints the daemon log.
@@ -225,12 +225,12 @@ sequenceDiagram
 
 | Step | Code |
 |---|---|
-| events stream | [`portWatcher.watch`](../vm/agent/main.go) → [`portWatcher.relist`](../vm/agent/main.go) → [`PublishedPorts`](../vm/agent/ports.go) |
-| sending changes only | [`portWatcher.update`](../vm/agent/main.go), [`handleControl`](../vm/agent/main.go) |
+| events stream | [`portWatcher.watch`](../vm/agent/portwatcher.go) → [`portWatcher.relist`](../vm/agent/portwatcher.go) → [`publishedPorts`](../vm/agent/ports.go) |
+| sending changes only | [`portWatcher.update`](../vm/agent/portwatcher.go), [`handleControl`](../vm/agent/control.go) |
 | host side | [`AgentClient.handle`](../Sources/DockmaCore/Agent/AgentClient.swift) → [`PortForwarder.update`](../Sources/DockmaCore/Forwarding/PortForwarder.swift) → [`PortForwarder.plan`](../Sources/DockmaCore/Forwarding/PortForwarder.swift) |
 | per connection | [`PortForwarder.tunnel`](../Sources/DockmaCore/Forwarding/PortForwarder.swift) → [`SocketCopier.pipe`](../Sources/DockmaCore/Forwarding/SocketCopier.swift) |
-| guest side | [`handleTunnel`](../vm/agent/main.go) → [`parseTunnelHeader`](../vm/agent/main.go) → [`pipe`](../vm/agent/main.go) |
-| UDP instead | [`DatagramRelay`](../Sources/DockmaCore/Forwarding/DatagramRelay.swift) ↔ [`relayUDP`](../vm/agent/udp.go), one connection per client, idle after 90 s |
+| guest side | [`relay.HandleTunnel`](../vm/agent/internal/relay/tunnel.go) → [`parseTunnelHeader`](../vm/agent/internal/relay/tunnel.go) → [`pipe`](../vm/agent/internal/relay/relay.go) |
+| UDP instead | [`DatagramRelay`](../Sources/DockmaCore/Forwarding/DatagramRelay.swift) ↔ [`relayUDP`](../vm/agent/internal/relay/udp.go), one connection per client, idle after 90 s |
 | port held on the Mac | [`PortForwarder.retryFailed`](../Sources/DockmaCore/Forwarding/PortForwarder.swift), every 10 s from `Daemon.vmStarted` |
 
 ### 4c. File changes on the Mac
@@ -257,11 +257,11 @@ sequenceDiagram
 
 | Step | Code |
 |---|---|
-| which paths | [`WatchedPaths`](../vm/agent/ports.go), sent by [`handleControl`](../vm/agent/main.go) |
+| which paths | [`watchedPaths`](../vm/agent/ports.go), sent by [`handleControl`](../vm/agent/control.go) |
 | trust boundary | [`FileWatcher.allowedPaths`](../Sources/DockmaCore/Agent/FileWatcher.swift) |
 | mapping and batching | [`FileWatcher.event`](../Sources/DockmaCore/Agent/FileWatcher.swift), [`FileWatcher.batches`](../Sources/DockmaCore/Agent/FileWatcher.swift) |
-| guest queue | [`fileForwarder.enqueue`](../vm/agent/fileevents.go) → [`fileForwarder.apply`](../vm/agent/fileevents.go) |
-| echo filter | [`echoFilter.recordGuestWrites`](../vm/agent/fileevents.go), [`fileForwarder.isEcho`](../vm/agent/fileevents.go) |
+| guest queue | [`Forwarder.Enqueue`](../vm/agent/internal/fileevents/fileevents.go) → [`Forwarder.apply`](../vm/agent/internal/fileevents/fileevents.go) |
+| echo filter | [`echoFilter.recordGuestWrites`](../vm/agent/internal/fileevents/fileevents.go), [`Forwarder.isEcho`](../vm/agent/internal/fileevents/fileevents.go) |
 | hook | [`dn_apply`](../vm/kernel/dockma_notify.c) |
 
 C goes to the hook before the echo check, because the check's `lstat` would cache the name, and the hook would then treat the file as one the guest already knew.
@@ -301,7 +301,7 @@ The daemon's exit code tells launchd what to do ([`Daemon.exitCode`](../Sources/
 
 ### 4e. `dockma shell`
 
-[`ShellSession.run`](../Sources/DockmaCore/Shell/ShellSession.swift) connects to `shell.sock`. The daemon only copies bytes to vsock 1027 ([`VsockSocketProxy.listen`](../Sources/DockmaCore/Forwarding/VsockSocketProxy.swift)), and [`handleShell`](../vm/agent/shell.go) runs the session. The frames and session rules are in [shell-protocol.md](shell-protocol.md).
+[`ShellSession.run`](../Sources/DockmaCore/Shell/ShellSession.swift) connects to `shell.sock`. The daemon only copies bytes to vsock 1027 ([`VsockSocketProxy.listen`](../Sources/DockmaCore/Forwarding/VsockSocketProxy.swift)), and [`shell.Handle`](../vm/agent/internal/shell/shell.go) runs the session. The frames and session rules are in [shell-protocol.md](shell-protocol.md).
 
 ## 5. Build and release
 
@@ -343,9 +343,9 @@ flowchart LR
 
 Changes that must touch several places at once:
 
-- **A new control message** (vsock 1025): [`AgentMessage`](../Sources/DockmaCore/Agent/AgentProtocol.swift) and Go's `message` in [`main`](../vm/agent/main.go), [`AgentClient.handle`](../Sources/DockmaCore/Agent/AgentClient.swift) and [`handleControl`](../vm/agent/main.go), and tests on both sides. Both sides ignore unknown types, so a new optional message needs no protocol bump; an incompatible one bumps [`GuestImage.protocolVersion`](../Sources/DockmaCore/VM/VMConfigurationBuilder.swift) and [`protocol`](../vm/agent/protocol) together.
+- **A new control message** (vsock 1025): [`AgentMessage`](../Sources/DockmaCore/Agent/AgentProtocol.swift) and Go's [`message`](../vm/agent/control.go), [`AgentClient.handle`](../Sources/DockmaCore/Agent/AgentClient.swift) and [`handleControl`](../vm/agent/control.go), and tests on both sides. Both sides ignore unknown types, so a new optional message needs no protocol bump; an incompatible one bumps [`GuestImage.protocolVersion`](../Sources/DockmaCore/VM/VMConfigurationBuilder.swift) and [`protocol`](../vm/agent/protocol) together.
 - **A vsock port:** [`VMConfigurationBuilder.Port`](../Sources/DockmaCore/VM/VMConfigurationBuilder.swift) and the constants in [`main`](../vm/agent/main.go).
-- **Shell frames:** [`ShellFrame`](../Sources/DockmaCore/Shell/ShellProtocol.swift), [`readFrame`](../vm/agent/shell.go), the golden bytes in both test suites, and [shell-protocol.md](shell-protocol.md).
+- **Shell frames:** [`ShellFrame`](../Sources/DockmaCore/Shell/ShellProtocol.swift), [`readFrame`](../vm/agent/internal/shell/shell.go), the golden bytes in both test suites, and [shell-protocol.md](shell-protocol.md).
 - **A kernel option:** [`dockma.config`](../vm/kernel/dockma.config). The Dockerfile's `olddefconfig` gate fails if it's dropped. Prove the feature works with a probe in [`e2e.sh`](../scripts/e2e.sh).
 - **Agent behavior:** bump `version` in [`main`](../vm/agent/main.go): the minor version for a feature, the patch for a fix.
 - **A CLI flag or command:** regenerate the docc reference (CLAUDE.md, "What this is") and update the README.

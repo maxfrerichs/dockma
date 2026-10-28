@@ -9,7 +9,7 @@
 # shellcheck disable=SC2154
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 state=/run/dockma
-# The agent's DNS port (dnsListenAddress in vm/agent/dns.go).
+# The agent's DNS port (dnsListenAddress in vm/agent/internal/dns/dns.go).
 dns_port=10053
 
 # write <file> <content>: replaces file in one step, so readers never see it

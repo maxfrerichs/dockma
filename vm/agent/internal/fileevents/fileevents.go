@@ -1,4 +1,4 @@
-package main
+package fileevents
 
 // Changes made on the Mac to watched bind-mount sources arrive from the host
 // as "files" batches and become inotify events in the guest through the
@@ -15,6 +15,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/dockma/dockma/vm/agent/internal/logchange"
 )
 
 const (
@@ -27,9 +29,9 @@ const (
 	fileQueueBatches = 1024
 )
 
-// fileEvent is one change on the Mac. MtimeNanos and Size are the file's
+// Event is one change on the Mac. MtimeNanos and Size are the file's
 // after the change, from the host's lstat; a D has neither.
-type fileEvent struct {
+type Event struct {
 	Op         string `json:"op"`
 	Path       string `json:"path"`
 	MtimeNanos int64  `json:"mtimeNanos,omitempty"`
@@ -38,7 +40,7 @@ type fileEvent struct {
 
 // valid reports whether the event is one the hook understands. A newline
 // would be cut by the hook, which strips one at the end of a write.
-func (e fileEvent) valid() bool {
+func (e Event) valid() bool {
 	return (e.Op == "M" || e.Op == "C" || e.Op == "D") &&
 		strings.HasPrefix(e.Path, "/") && !strings.ContainsAny(e.Path, "\n\x00")
 }
@@ -128,22 +130,22 @@ func (f *echoFilter) recordGuestWrites(share string) error {
 	}
 }
 
-// fileForwarder hands host file events to the kernel hook. Batches wait in
+// Forwarder hands host file events to the kernel hook. Batches wait in
 // queue for a worker, so the control reader never stalls behind the hook's
 // virtiofs round trips and the host's writes never block.
-type fileForwarder struct {
+type Forwarder struct {
 	notify *os.File
 	echoes *echoFilter
-	errs   changeLogger
-	queue  chan []fileEvent
+	errs   logchange.Logger
+	queue  chan []Event
 	// echoSeen logs the first echo dropped, which scripts/e2e.sh looks for.
 	echoSeen sync.Once
 }
 
-// newFileForwarder returns nil when there is no home share or the kernel has
+// NewForwarder returns nil when there is no home share or the kernel has
 // no hook, which turns the feature off.
-func newFileForwarder() *fileForwarder {
-	share := homeShare()
+func NewForwarder() *Forwarder {
+	share := HomeShare()
 	if share == "" {
 		return nil
 	}
@@ -152,7 +154,7 @@ func newFileForwarder() *fileForwarder {
 		log.Printf("file events off: %v", err)
 		return nil
 	}
-	f := &fileForwarder{notify: notify, echoes: newEchoFilter(), queue: make(chan []fileEvent, fileQueueBatches)}
+	f := &Forwarder{notify: notify, echoes: newEchoFilter(), queue: make(chan []Event, fileQueueBatches)}
 	go func() {
 		for batch := range f.queue {
 			f.apply(batch)
@@ -167,8 +169,8 @@ func newFileForwarder() *fileForwarder {
 	return f
 }
 
-// homeShare returns the guest path of the home share, or "" if it isn't mounted.
-func homeShare() string {
+// HomeShare returns the guest path of the home share, or "" if it isn't mounted.
+func HomeShare() string {
 	b, err := os.ReadFile(shareFile)
 	if err != nil {
 		return ""
@@ -176,10 +178,10 @@ func homeShare() string {
 	return strings.TrimSpace(string(b))
 }
 
-// enqueue queues a batch for the worker and reports whether it fit. A dropped
+// Enqueue queues a batch for the worker and reports whether it fit. A dropped
 // batch raises no events, and the guest serves those files from its cache
 // until virtiofs revalidates them, as it did before file events.
-func (f *fileForwarder) enqueue(events []fileEvent) bool {
+func (f *Forwarder) Enqueue(events []Event) bool {
 	select {
 	case f.queue <- events:
 		return true
@@ -190,10 +192,10 @@ func (f *fileForwarder) enqueue(events []fileEvent) bool {
 }
 
 // apply raises the events for a batch, skipping the Mac's echoes of guest writes.
-func (f *fileForwarder) apply(events []fileEvent) {
+func (f *Forwarder) apply(events []Event) {
 	for _, e := range events {
 		if !e.valid() {
-			f.errs.printf("file events: ignoring %q %q", e.Op, e.Path)
+			f.errs.Printf("file events: ignoring %q %q", e.Op, e.Path)
 			continue
 		}
 		// C goes first: the echo check's lstat caches the name, after which the
@@ -214,19 +216,19 @@ func (f *fileForwarder) apply(events []fileEvent) {
 }
 
 // write hands one change to the hook and reports whether the path was there.
-func (f *fileForwarder) write(op, path string) bool {
+func (f *Forwarder) write(op, path string) bool {
 	// One change per write; the hook takes no trailing newline.
 	_, err := f.notify.Write([]byte(op + " " + path))
 	// Gone again by now, or no longer on the share: nothing to raise.
 	if err != nil && !errors.Is(err, unix.ENOENT) && !errors.Is(err, unix.EXDEV) {
-		f.errs.printf("file events: %s %s: %v", op, path, err)
+		f.errs.Printf("file events: %s %s: %v", op, path, err)
 	}
 	return err == nil
 }
 
 // isEcho reports whether a change on the Mac is the guest's own write coming
 // back. A directory counts as one: M raises nothing for it.
-func (f *fileForwarder) isEcho(e fileEvent) bool {
+func (f *Forwarder) isEcho(e Event) bool {
 	var st unix.Stat_t
 	if unix.Lstat(e.Path, &st) != nil {
 		return false

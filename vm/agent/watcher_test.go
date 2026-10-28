@@ -13,7 +13,7 @@ func TestSubscribeCancelClosesChannel(t *testing.T) {
 	if _, open := <-updates; open {
 		t.Fatal("channel still open after cancel")
 	}
-	w.publish([]ForwardedPort{{Port: 80, Target: "127.0.0.1:80"}}) // must not panic
+	w.publish([]forwardedPort{{Port: 80, Target: "127.0.0.1:80"}}) // must not panic
 }
 
 func TestSubscribeSeesReadinessChanges(t *testing.T) {

@@ -1,4 +1,4 @@
-package main
+package daemonconfig
 
 import (
 	"encoding/json"
@@ -7,6 +7,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/dockma/dockma/vm/agent/internal/lease"
 )
 
 // protectedDaemonKeys are the baked daemon.json settings dockma depends on: a
@@ -77,11 +79,11 @@ func readJSONObject(path string) (map[string]any, error) {
 	return object, nil
 }
 
-// runDaemonConfig implements `dockma-agent daemon-config <baked> <user> <gateway file> <out>`,
+// Run implements `dockma-agent daemon-config <baked> <user> <gateway file> <out>`,
 // which the dockerd init script runs before each dockerd start. A user file
 // that doesn't parse is skipped with a message; the init script validates
 // the result with `dockerd --validate` and falls back to the baked file.
-func runDaemonConfig(args []string) int {
+func Run(args []string) int {
 	if len(args) != 4 {
 		fmt.Fprintln(os.Stderr, "usage: dockma-agent daemon-config <baked> <user> <gateway file> <out>")
 		return 2
@@ -98,7 +100,7 @@ func runDaemonConfig(args []string) int {
 		user = map[string]any{}
 	}
 	gateway := ""
-	if ip := readIP(gatewayPath); ip != nil {
+	if ip := lease.ReadIP(gatewayPath); ip != nil {
 		gateway = ip.String()
 	}
 	merged, warnings := mergeDaemonConfig(baked, user, gateway)

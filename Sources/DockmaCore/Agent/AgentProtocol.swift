@@ -101,8 +101,8 @@ public struct AgentMessage: Codable, Equatable, Sendable {
     }
 }
 
-/// One change made on the Mac below a watched path. Mirrors `fileEvent` in
-/// vm/agent/fileevents.go.
+/// One change made on the Mac below a watched path. Mirrors `Event` in
+/// vm/agent/internal/fileevents/fileevents.go.
 public struct FileEvent: Codable, Equatable, Sendable {
     /// What happened to the path; raw values are wire strings.
     public enum Op: String, Codable, Sendable {

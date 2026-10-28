@@ -1,4 +1,4 @@
-package main
+package filewaiter
 
 import (
 	"os"
@@ -9,18 +9,18 @@ import (
 
 func TestFileWaiterWakesOnCreate(t *testing.T) {
 	dir := t.TempDir()
-	w, err := newFileWaiter(dir, "docker.sock")
+	w, err := New(dir, "docker.sock")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.close()
+	defer w.Close()
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		os.WriteFile(filepath.Join(dir, "other"), nil, 0o600)
 		os.WriteFile(filepath.Join(dir, "docker.sock"), nil, 0o600)
 	}()
 	start := time.Now()
-	if !w.wait(5 * time.Second) {
+	if !w.Wait(5 * time.Second) {
 		t.Fatal("wait timed out")
 	}
 	if d := time.Since(start); d > 2*time.Second {
@@ -29,12 +29,12 @@ func TestFileWaiterWakesOnCreate(t *testing.T) {
 }
 
 func TestFileWaiterTimesOut(t *testing.T) {
-	w, err := newFileWaiter(t.TempDir(), "docker.sock")
+	w, err := New(t.TempDir(), "docker.sock")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.close()
-	if w.wait(50 * time.Millisecond) {
+	defer w.Close()
+	if w.Wait(50 * time.Millisecond) {
 		t.Fatal("woke without a create")
 	}
 }

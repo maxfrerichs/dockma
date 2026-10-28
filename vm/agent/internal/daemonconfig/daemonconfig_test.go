@@ -1,4 +1,4 @@
-package main
+package daemonconfig
 
 import (
 	"encoding/json"
@@ -75,7 +75,7 @@ func TestRunDaemonConfigSkipsAnInvalidUserFile(t *testing.T) {
 	os.WriteFile(baked, data, 0o644)
 	os.WriteFile(user, []byte(`{"debug": true,`), 0o644)
 	os.WriteFile(gateway, []byte("192.168.64.1\n"), 0o644)
-	if code := runDaemonConfig([]string{baked, user, gateway, out}); code != 0 {
+	if code := Run([]string{baked, user, gateway, out}); code != 0 {
 		t.Fatalf("exit code %d", code)
 	}
 	merged, err := readJSONObject(out)
@@ -89,7 +89,7 @@ func TestRunDaemonConfigSkipsAnInvalidUserFile(t *testing.T) {
 		t.Errorf("host-gateway-ips = %v", merged["host-gateway-ips"])
 	}
 	// No user file at all is the common case.
-	if code := runDaemonConfig([]string{baked, filepath.Join(dir, "missing.json"), gateway, out}); code != 0 {
+	if code := Run([]string{baked, filepath.Join(dir, "missing.json"), gateway, out}); code != 0 {
 		t.Fatalf("exit code %d without a user file", code)
 	}
 }
