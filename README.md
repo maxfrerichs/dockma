@@ -12,7 +12,7 @@ dockma runs the Docker Engine in a minimal Linux VM on Apple's Virtualization.fr
 
 | Feature | What you get |
 |---|---|
-| Minimal guest | A custom 6.18 LTS kernel with only what Docker needs, no modules, and a busybox initramfs with Docker's static binaries. Docker is ready about 0.6 s after boot starts. |
+| Minimal guest | A custom 6.18 LTS kernel with only what Docker needs, no modules, and a busybox initramfs with Docker's static binaries. Docker is ready about 1.0 s after boot starts. |
 | Shared home | `$HOME` is mounted into the VM at the same path, so `docker run -v "$PWD:/src"` works anywhere under it. |
 | Ports on localhost | `-p 8080:80` answers on `localhost:8080` (IPv4 and IPv6), UDP included. Ports below 1024 work too ([details](#ports-below-1024)). |
 | Containers reach the Mac | `host.docker.internal` and `--add-host name:host-gateway` resolve to the Mac, as on Docker Desktop. A Mac service must listen on more than `127.0.0.1` to be reachable. |
