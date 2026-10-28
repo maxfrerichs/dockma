@@ -145,6 +145,10 @@ notify "M $notify_dir/mfile" 2>/dev/null && fail "notify accepted a path whose f
 "$DOCKMA" shell -- umount "$notify_dir/mfile"
 notify "M relative" 2>/dev/null && fail "notify accepted a relative path"
 docker run --rm alpine sh -c 'echo "M /" >/proc/fs/dockma-notify' 2>/dev/null && fail "a default container can write to dockma-notify"
+# Unmasked /proc/fs and a path that resolves in the container: only capable() can refuse it.
+docker run --rm --security-opt systempaths=unconfined --cap-drop SYS_ADMIN -v "$notify_dir:$notify_dir" alpine \
+	sh -c "echo 'M $notify_dir/a' >/proc/fs/dockma-notify" 2>&1 | grep -q 'not permitted' ||
+	fail "dockma-notify accepted a write without CAP_SYS_ADMIN"
 docker rm -f dockma-e2e-notify >/dev/null
 docker volume rm dockma-e2e-notify >/dev/null
 rm -rf -- "$notify_dir"
