@@ -33,9 +33,13 @@ WORKDIR /build/linux
 # Host file changes into guest inotify; built into virtiofs, which the agent feeds.
 COPY kernel/dockma_notify.c fs/fuse/
 RUN echo "virtiofs-y += dockma_notify.o" >>fs/fuse/Makefile
-COPY kernel/dockma.config /build/dockma.config
-RUN make ARCH=arm64 tinyconfig \
- && scripts/kconfig/merge_config.sh -m .config /build/dockma.config \
+COPY kernel/dockma.config kernel/debug.config /build/
+# DEBUG=1 (make guest DEBUG=1) builds the debug guest: docs/debugging.md.
+ARG DEBUG=0
+RUN cp /build/dockma.config /build/fragments.config \
+ && if [ "$DEBUG" = 1 ]; then cat /build/debug.config >>/build/fragments.config; fi \
+ && make ARCH=arm64 tinyconfig \
+ && scripts/kconfig/merge_config.sh -m .config /build/fragments.config \
  && make ARCH=arm64 olddefconfig
 # Every fragment option must survive olddefconfig; a dropped one means an
 # unmet dependency that would otherwise fail silently at runtime. Every
@@ -47,7 +51,7 @@ RUN missing=0; \
       "# CONFIG_"*" is not set") opt=${line#"# "}; opt=${opt%% *}; \
         if grep -q "^$opt=" .config; then echo "fragment option not disabled: $opt"; missing=1; fi ;; \
       esac; \
-    done < /build/dockma.config; \
+    done < /build/fragments.config; \
     exit $missing
 COPY kernel/check-docker-config.sh /build/
 RUN sh /build/check-docker-config.sh /build/check-config.sh .config
@@ -61,8 +65,18 @@ WORKDIR /src
 COPY agent/go.mod agent/go.sum ./
 RUN go mod download
 COPY agent/ ./
+ARG DEBUG=0
+# Go checks the module against sum.golang.org, as it does the agent's dependencies.
+ARG DELVE_VERSION=v1.27.2
+# The debug guest's agent keeps its symbols and skips optimizations for Delve.
 RUN go vet ./... && go test ./... \
- && CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/dockma-agent .
+ && mkdir -p /out/debug \
+ && if [ "$DEBUG" = 1 ]; then \
+      CGO_ENABLED=0 go build -trimpath -gcflags='all=-N -l' -o /out/dockma-agent . \
+      && CGO_ENABLED=0 GOBIN=/out/debug go install github.com/go-delve/delve/cmd/dlv@${DELVE_VERSION}; \
+    else \
+      CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/dockma-agent .; \
+    fi
 
 # --- Docker static bundle --------------------------------------------------
 FROM ${ALPINE} AS docker
@@ -95,10 +109,20 @@ COPY --from=docker /out/ usr/bin/
 COPY --from=agent /out/dockma-agent usr/bin/dockma-agent
 COPY rootfs/ ./
 COPY tests/ /tests/
+# Delve and the agent wrapper; installed only into the debug guest.
+COPY --from=agent /out/debug/ /debug/
+COPY rootfs-debug/ /debug/
+ARG DEBUG=0
 RUN chmod 0755 init etc/init.d/* usr/libexec/dockma-disk usr/libexec/dockma-motd usr/share/udhcpc/default.script \
  && usr/sbin/nft --version && sbin/mke2fs -V && sbin/e2fsck -V \
  && sh /tests/dockma-disk-test.sh /rootfs/usr/libexec/dockma-disk /rootfs/bin/busybox \
  && sh /tests/dockma-motd-test.sh /rootfs/usr/libexec/dockma-motd /rootfs/bin/busybox \
+ && if [ "$DEBUG" = 1 ]; then \
+      cp /debug/dlv usr/bin/ && cp /debug/usr/libexec/dockma-agent-debug usr/libexec/ \
+      && chmod 0755 usr/libexec/dockma-agent-debug \
+      && sed -i 's|^::respawn:/usr/bin/dockma-agent$|::respawn:/usr/libexec/dockma-agent-debug|' etc/inittab \
+      && grep -q dockma-agent-debug etc/inittab; \
+    fi \
  && mkdir -p /out \
  && printf 'dir /dev 0755 0 0\nnod /dev/console 0600 0 0 c 5 1\nnod /dev/null 0666 0 0 c 1 3\n' > /tmp/devices \
  && { gen_init_cpio /tmp/devices; find . -mindepth 1 | sort | cpio -o -H newc --quiet; } \

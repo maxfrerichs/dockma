@@ -244,6 +244,7 @@ make test           # unit tests (Swift Testing)
 make e2e            # build, then scripts/e2e.sh against a real VM
 make guest          # rebuild the guest; also runs the agent's go vet and go test
 make install-guest  # copy the guest to $DOCKMA_HOME/guest (default ~/.dockma/guest)
+make debug-vm       # debug guest (Delve, tracing kernel) in ~/.dockma-debug; see docs/debugging.md
 make site           # build the website into site/public (needs Hugo); make site-serve previews it
 scripts/bench.sh          # boot phase breakdown; restarts the VM RUNS times (default 5)
 scripts/bench-compare.py  # dockma vs Lima vs OrbStack; see docs/benchmarks.md
@@ -251,7 +252,7 @@ scripts/bench-compare.py  # dockma vs Lima vs OrbStack; see docs/benchmarks.md
 
 `make e2e` runs against its own VM in `~/.dockma-e2e`, so yours keeps running; it still mounts your real home. That VM's guest is copied from `~/.dockma/guest` if missing; test a fresh build with `make guest install-guest DOCKMA_HOME=~/.dockma-e2e`. The suite pins `DOCKER_HOST` to dockma's socket and covers forwarding (TCP, UDP, held ports), `host.docker.internal`, bind mounts, Docker-in-Docker, Rosetta, `daemon.json`, persistence across restart and a graceful stop.
 
-To debug the daemon in the foreground: `dockma stop`, then `.build/debug/dockma daemon`, and Ctrl-C to stop it.
+To debug the daemon in the foreground: `dockma stop`, then `.build/debug/dockma daemon`, and Ctrl-C to stop it. For stepping through the daemon, the agent and the kernel hook against a separate VM, with VS Code configurations and guided tours, see [docs/debugging.md](docs/debugging.md).
 
 ### Layout
 

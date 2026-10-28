@@ -13,8 +13,13 @@ GUEST_DIR = $(STATE_DIR)/guest
 E2E_HOME ?= $(HOME)/.dockma-e2e
 # Extra `docker buildx build` flags for `make guest`; CI passes its build cache.
 BUILDX_FLAGS ?=
+# DEBUG=1: the debug guest (docs/debugging.md), built into its own directory.
+DEBUG ?= 0
+GUEST_OUT = $(if $(filter 1,$(DEBUG)),vm/out-debug,vm/out)
+# make debug-vm installs the debug guest into this state directory.
+DEBUG_HOME ?= $(HOME)/.dockma-debug
 
-.PHONY: build install test guest install-guest e2e site site-serve clean
+.PHONY: build install test guest install-guest debug-vm e2e site site-serve clean
 
 build:
 	swift build -c $(CONFIGURATION) --product dockma
@@ -38,12 +43,17 @@ test:
 # Builds kernel + initramfs in a Linux container (any arm64 Docker works,
 # including dockma itself once it is running).
 guest:
-	$(DOCKER) buildx build --platform linux/arm64 $(BUILDX_FLAGS) --output type=local,dest=vm/out vm
+	$(DOCKER) buildx build --platform linux/arm64 --build-arg DEBUG=$(DEBUG) $(BUILDX_FLAGS) --output type=local,dest=$(GUEST_OUT) vm
 
-install-guest: vm/out/dockma-kernel vm/out/dockma-initrd.img vm/out/guest-protocol
+install-guest: $(GUEST_OUT)/dockma-kernel $(GUEST_OUT)/dockma-initrd.img $(GUEST_OUT)/guest-protocol
 	mkdir -p $(GUEST_DIR)
-	cp vm/out/dockma-kernel vm/out/dockma-initrd.img vm/out/guest-protocol $(GUEST_DIR)/
+	cp $^ $(GUEST_DIR)/
 	echo local >$(GUEST_DIR)/origin
+
+# A signed debug build plus the debug guest in DEBUG_HOME; docs/debugging.md.
+debug-vm: build
+	$(MAKE) guest DEBUG=1
+	$(MAKE) install-guest DEBUG=1 DOCKMA_HOME=$(DEBUG_HOME)
 
 # The e2e VM needs a guest: `make install-guest DOCKMA_HOME=$(E2E_HOME)`
 # installs a fresh build, or the script copies the one in ~/.dockma/guest.
@@ -62,4 +72,4 @@ site-serve:
 
 clean:
 	swift package clean
-	rm -rf vm/out site/public site/resources
+	rm -rf vm/out vm/out-debug site/public site/resources

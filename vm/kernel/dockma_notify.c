@@ -15,6 +15,8 @@
  * inode the guest already had under that name, such as the host's echo of the
  * guest's own mkdir, raises no CREATE.
  */
+#define pr_fmt(fmt) "dockma-notify: " fmt
+
 #include <linux/fs.h>
 #include <linux/fsnotify.h>
 #include <linux/namei.h>
@@ -104,6 +106,8 @@ static int dn_apply(char op, const char *path)
 		if (!(cached && d_inode(cached) == d_inode(child.dentry)))
 			fsnotify_name(d_is_dir(child.dentry) ? FS_CREATE | FS_ISDIR : FS_CREATE,
 				      child.dentry, FSNOTIFY_EVENT_DENTRY, dir, &name, 0);
+		else
+			pr_debug("C %s: inode already known, no CREATE\n", path);
 	} else if (!d_is_dir(child.dentry)) {
 		dn_modified(child.dentry);
 	}
@@ -132,6 +136,8 @@ static ssize_t dn_write(struct file *file, const char __user *ubuf, size_t len, 
 	if (buf[len - 1] == '\n')
 		buf[len - 1] = '\0';
 	err = (strchr("MCD", buf[0]) && buf[0] && buf[1] == ' ') ? dn_apply(buf[0], buf + 2) : -EINVAL;
+	/* Compiled out unless the debug guest's DYNAMIC_DEBUG enables it. */
+	pr_debug("%s: %d\n", buf, err);
 	kfree(buf);
 	return err ? err : len;
 }

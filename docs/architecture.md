@@ -5,6 +5,7 @@ How dockma's parts fit together, for people maintaining it. Each diagram is foll
 Related pages:
 - [CLAUDE.md](../CLAUDE.md): the host–guest protocol table, the file-by-file source map, and the project's rules and gotchas.
 - [shell-protocol.md](shell-protocol.md): the `dockma shell` frames.
+- [debugging.md](debugging.md): stepping through these flows with a debugger, layer by layer.
 - [README.md](../README.md): what users see.
 
 ## 1. System overview

@@ -1,0 +1,17 @@
+#!/bin/sh
+# Debug guest only (make guest DEBUG=1): init respawns this instead of
+# dockma-agent. It runs the agent under Delve, which listens on :2345 for a
+# client (VS Code, dlv connect). The agent runs at once, unless the state
+# directory holds agent-debug-wait: then it waits for a client to continue it.
+# Whatever reaches port 2345 is root in the VM; see docs/debugging.md.
+state=$(cat /run/dockma/state 2>/dev/null)
+continue=--continue
+if [ -n "$state" ] && [ -e "$state/agent-debug-wait" ]; then
+	continue=
+	echo "dockma-agent-debug: waiting for a debugger on :2345"
+fi
+# stdin from /dev/null: on init's console, which isn't this process's
+# controlling terminal, Delve tries to make the agent its foreground job and
+# fails with ENOTTY.
+# shellcheck disable=SC2086 # $continue is empty or one flag
+exec /usr/bin/dlv exec --headless --listen=:2345 --api-version=2 --accept-multiclient $continue /usr/bin/dockma-agent </dev/null
