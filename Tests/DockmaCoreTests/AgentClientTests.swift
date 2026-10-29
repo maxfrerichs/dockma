@@ -111,3 +111,25 @@ private func waitUntil(_ condition: () -> Bool, sourceLocation: SourceLocation =
     // omitempty drops an empty set; it means nothing to watch.
     #expect(watched == [["/Users/me/src"], []])
 }
+
+@MainActor
+@Test func sendGivesUpOnAnAgentThatStopsReading() async throws {
+    let client = AgentClient()
+    let connection = try makeConnection()
+    defer { close(connection.agent) }
+    client.accept(connection.host)
+
+    var timeout = timeval()
+    var length = socklen_t(MemoryLayout<timeval>.size)
+    getsockopt(connection.host, SOL_SOCKET, SO_SNDTIMEO, &timeout, &length)
+    #expect(timeout.tv_sec == AgentClient.sendTimeoutSeconds)
+    // Shorter here, so the test doesn't hold the main actor for seconds.
+    timeout = timeval(tv_sec: 0, tv_usec: 50_000)
+    setsockopt(connection.host, SOL_SOCKET, SO_SNDTIMEO, &timeout, length)
+
+    // The agent never reads, so the socket buffer fills and the write times out.
+    let large = AgentMessage.files([FileEvent(op: .deleted, path: "/" + String(repeating: "x", count: 1 << 20))])
+    #expect(!client.send(large))
+    // The dropped connection detaches like a lost agent.
+    try await waitUntil { !client.isConnected }
+}
