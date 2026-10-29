@@ -138,6 +138,8 @@ type Forwarder struct {
 	echoes *echoFilter
 	errs   logchange.Logger
 	queue  chan []Event
+	// drops logs a full queue once per overflow; Enqueue runs on the control reader, errs on the worker.
+	drops logchange.Logger
 	// echoSeen logs the first echo dropped, which scripts/e2e.sh looks for.
 	echoSeen sync.Once
 }
@@ -184,9 +186,10 @@ func HomeShare() string {
 func (f *Forwarder) Enqueue(events []Event) bool {
 	select {
 	case f.queue <- events:
+		f.drops.Reset()
 		return true
 	default:
-		log.Printf("file events: queue full, dropped %d changes from the Mac", len(events))
+		f.drops.Printf("file events: queue full, dropping changes from the Mac")
 		return false
 	}
 }

@@ -83,8 +83,8 @@ func handleControl(c net.Conn, ports *portWatcher, files *fileevents.Forwarder) 
 					return
 				}
 			}
-			if sent == nil || !equalPorts(sent.Ports, state.Ports) {
-				if send(message{Type: "ports", Ports: nonNil(state.Ports)}) != nil {
+			if sent == nil || !slices.Equal(sent.Ports, state.Ports) {
+				if send(message{Type: "ports", Ports: state.Ports}) != nil {
 					c.Close()
 					return
 				}
@@ -122,13 +122,6 @@ func handleControl(c net.Conn, ports *portWatcher, files *fileevents.Forwarder) 
 			log.Printf("control: unknown message type %q", m.Type)
 		}
 	}
-}
-
-func nonNil(p []forwardedPort) []forwardedPort {
-	if p == nil {
-		return []forwardedPort{}
-	}
-	return p
 }
 
 func utsString(b []int8) string {

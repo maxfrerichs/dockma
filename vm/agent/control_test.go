@@ -76,7 +76,9 @@ func TestHandleControlSendsChangesOnly(t *testing.T) {
 	if got, want := next(), `{"type":"docker","ready":true}`; got != want {
 		t.Fatalf("after ready: got %s; want %s", got, want)
 	}
-	w.publish([]forwardedPort{{Port: 8080, Transport: "tcp", Target: "127.0.0.1:8080"}})
+	w.update(func(s *watcherState) {
+		s.Ports = []forwardedPort{{Port: 8080, Transport: "tcp", Target: "127.0.0.1:8080"}}
+	})
 	if got, want := next(), `{"type":"ports","ports":[{"port":8080,"transport":"tcp","target":"127.0.0.1:8080"}]}`; got != want {
 		t.Fatalf("after publish: got %s; want %s", got, want)
 	}

@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	version = "0.7.1"
+	version = "0.7.2"
 
 	dockerPort  = 1024
 	controlPort = 1025

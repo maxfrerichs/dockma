@@ -5,6 +5,9 @@ import Foundation
 /// messages on the main actor.
 @MainActor
 public final class AgentClient {
+    /// How long a write to the agent may block before the connection is dropped.
+    nonisolated static let sendTimeoutSeconds = 5
+
     private var fd: Int32 = -1
     private var isStopped = false
 
@@ -32,11 +35,17 @@ public final class AgentClient {
         }
     }
 
-    /// Sends a message; returns false when the agent isn't connected.
+    /// Sends a message; returns false when the agent isn't connected or the
+    /// write timed out, which drops the connection.
     @discardableResult
     public func send(_ message: AgentMessage) -> Bool {
         guard fd >= 0, let data = try? jsonLine(message) else { return false }
-        return writeAll(data, to: fd)
+        guard writeAll(data, to: fd) else {
+            // The reader thread sees EOF and detaches it; the agent redials.
+            shutdown(fd, SHUT_RDWR)
+            return false
+        }
+        return true
     }
 
     /// Takes a connection the agent opened. It replaces an existing one,
@@ -51,15 +60,18 @@ public final class AgentClient {
             shutdown(fd, SHUT_RDWR)
         }
         fd = newFD
+        // This runs on the main actor: a guest that stops reading mustn't block it.
+        SocketOptions.setTimeout(seconds: Self.sendTimeoutSeconds, on: newFD, for: [SO_SNDTIMEO])
         Log.info("agent connected")
         onConnect?()
         Thread.detachNewThread { [newFD] in
             let reader = LineReader(fd: newFD)
             while let line = reader.readLine() {
                 guard let message = try? JSONDecoder().decode(AgentMessage.self, from: line) else { continue }
-                Task { @MainActor in self.handle(message, from: newFD) }
+                // The main queue keeps messages in order; Task hops don't promise that.
+                DispatchQueue.main.async { MainActor.assumeIsolated { self.handle(message, from: newFD) } }
             }
-            Task { @MainActor in self.detach(newFD) }
+            DispatchQueue.main.async { MainActor.assumeIsolated { self.detach(newFD) } }
         }
     }
 

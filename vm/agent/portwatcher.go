@@ -70,11 +70,6 @@ func (w *portWatcher) subscribe() (<-chan watcherState, func()) {
 	}
 }
 
-// publish records the published ports.
-func (w *portWatcher) publish(set []forwardedPort) {
-	w.update(func(s *watcherState) { s.Ports = set })
-}
-
 // setDockerReady records whether dockerd's API answers.
 func (w *portWatcher) setDockerReady(ready bool) {
 	w.update(func(s *watcherState) { s.DockerReady = ready })
@@ -86,7 +81,7 @@ func (w *portWatcher) update(change func(*watcherState)) {
 	defer w.mu.Unlock()
 	next := w.current
 	change(&next)
-	if next.DockerReady == w.current.DockerReady && equalPorts(next.Ports, w.current.Ports) && slices.Equal(next.Watch, w.current.Watch) {
+	if next.DockerReady == w.current.DockerReady && slices.Equal(next.Ports, w.current.Ports) && slices.Equal(next.Watch, w.current.Watch) {
 		return
 	}
 	w.current = next
@@ -97,18 +92,6 @@ func (w *portWatcher) update(change func(*watcherState)) {
 		}
 		ch <- next
 	}
-}
-
-func equalPorts(a, b []forwardedPort) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func (w *portWatcher) run(ctx context.Context) {

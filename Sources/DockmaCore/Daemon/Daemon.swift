@@ -181,6 +181,8 @@ public final class Daemon {
     }
 
     private func vmStarted(_ host: VMHost) {
+        // A stop that came while the VM started has already closed the listeners.
+        guard !isStopRequested else { return }
         Log.info("VM running")
         do {
             listeners.append(try VsockSocketProxy.listen(
@@ -289,11 +291,7 @@ public final class Daemon {
         state = .stopping
         // New connections are refused from here on; the agent connection
         // stays open to deliver the shutdown request.
-        ports?.removeAll()
-        files?.stop()
-        listeners.forEach { $0.cancel() }
-        listeners.removeAll()
-        closeReadyWaiters()
+        closeListeners()
 
         guard let host, host.isRunning else {
             exit(0)
@@ -357,18 +355,19 @@ public final class Daemon {
         stopRequested ? 0 : 1
     }
 
-    private func closeForwarding() {
+    /// Closes forwarded ports, file watching, every listener and pending `wait` requests.
+    private func closeListeners() {
         ports?.removeAll()
         files?.stop()
-        agent?.stop()
-    }
-
-    /// Closes forwarding and every listener.
-    private func cleanUp() {
-        closeForwarding()
         listeners.forEach { $0.cancel() }
         listeners.removeAll()
         closeReadyWaiters()
+    }
+
+    /// Closes everything, the agent connection included.
+    private func cleanUp() {
+        closeListeners()
+        agent?.stop()
     }
 
     /// How many previous logs `rotateAndOpen` keeps, as `<name>.1` (the
