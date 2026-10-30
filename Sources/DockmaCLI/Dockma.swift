@@ -103,6 +103,10 @@ struct Start: ParsableCommand {
                 throw StartFailure.timedOut
             }
         } catch StartFailure.daemonExited {
+            // A daemon that failed leaves its job loaded. A `dockma stop`
+            // unloads it, and before the VM runs the daemon exits too soon for
+            // its nil `wait` reply to arrive.
+            guard agent.state().isLoaded else { throw DockmaError("dockma was stopped while it was starting") }
             // launchd would start the job again for the request still queued
             // on its service; unloading drops both.
             try? agent.bootout()
