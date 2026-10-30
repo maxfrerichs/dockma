@@ -1,5 +1,7 @@
 import Foundation
 import Testing
+// XPC objects are thread-safe, but the module predates Sendable.
+@preconcurrency import XPC
 @testable import DockmaCore
 
 /// A short socket path; sun_path holds only 104 bytes.
@@ -7,11 +9,19 @@ private func makeSocketPath() -> String {
     "/tmp/dockma-test-\(UUID().uuidString.prefix(8)).sock"
 }
 
-/// Connects and waits off the main actor, which serves the replies.
-private func waitUntilReady(path: String, timeout: Duration) async throws -> ControlClient.WaitOutcome {
+/// An anonymous control server on the main queue, as the daemon serves its
+/// Mach service, and an endpoint that clients connect through.
+@MainActor
+private func makeServer(respond: @escaping @MainActor (ControlRequest, ControlReply) -> Void) -> (listener: xpc_connection_t, endpoint: xpc_endpoint_t) {
+    let listener = xpc_connection_create(nil, .main)
+    ControlServer.serve(listener, respond: respond)
+    return (listener, xpc_endpoint_create(listener))
+}
+
+/// Waits for Docker off the main actor, which serves the replies.
+private func waitUntilReady(endpoint: xpc_endpoint_t, timeout: Duration) async throws -> ControlClient.WaitOutcome {
     try await runOnThread {
-        let fd = try UnixSocket.connect(path: path, timeoutSeconds: 5)
-        return try ControlClient.waitUntilReady(fd: fd, timeout: timeout)
+        try ControlClient.waitUntilReady(over: xpc_connection_create_from_endpoint(endpoint), timeout: timeout)
     }
 }
 
@@ -21,9 +31,8 @@ private let status = DaemonStatus(
 
 @MainActor
 @Test func waitIsAnsweredWhenTheServerReplies() async throws {
-    let path = makeSocketPath()
     var pending: [ControlReply] = []
-    let listener = try ControlServer.listen(path: path) { request, reply in
+    let server = makeServer { request, reply in
         #expect(request.command == .wait)
         pending.append(reply)
         // Reply later, as the daemon does once Docker is ready.
@@ -33,8 +42,8 @@ private let status = DaemonStatus(
             }
         }
     }
-    defer { listener.cancel() }
-    guard case .ready(let reply) = try await waitUntilReady(path: path, timeout: .seconds(5)) else {
+    defer { xpc_connection_cancel(server.listener) }
+    guard case .ready(let reply) = try await waitUntilReady(endpoint: server.endpoint, timeout: .seconds(5)) else {
         Issue.record("not ready")
         return
     }
@@ -43,10 +52,20 @@ private let status = DaemonStatus(
 
 @MainActor
 @Test func waitSeesAClosedReply() async throws {
-    let path = makeSocketPath()
-    let listener = try ControlServer.listen(path: path) { _, reply in reply.close() }
-    defer { listener.cancel() }
-    guard case .closed = try await waitUntilReady(path: path, timeout: .seconds(5)) else {
+    let server = makeServer { _, reply in reply.close() }
+    defer { xpc_connection_cancel(server.listener) }
+    guard case .closed = try await waitUntilReady(endpoint: server.endpoint, timeout: .seconds(5)) else {
+        Issue.record("not closed")
+        return
+    }
+}
+
+@MainActor
+@Test func waitSeesTheServerGoAway() async throws {
+    let server = makeServer { _, _ in }
+    // Cancelled before the client connects: like a daemon that exited.
+    xpc_connection_cancel(server.listener)
+    guard case .closed = try await waitUntilReady(endpoint: server.endpoint, timeout: .seconds(5)) else {
         Issue.record("not closed")
         return
     }
@@ -54,17 +73,53 @@ private let status = DaemonStatus(
 
 @MainActor
 @Test func waitTimesOut() async throws {
-    let path = makeSocketPath()
     var pending: [ControlReply] = []
-    let listener = try ControlServer.listen(path: path) { _, reply in pending.append(reply) }
+    let server = makeServer { _, reply in pending.append(reply) }
     defer {
-        listener.cancel()
+        xpc_connection_cancel(server.listener)
         pending.forEach { $0.close() }
     }
-    guard case .timedOut = try await waitUntilReady(path: path, timeout: .milliseconds(100)) else {
+    guard case .timedOut = try await waitUntilReady(endpoint: server.endpoint, timeout: .milliseconds(100)) else {
         Issue.record("did not time out")
         return
     }
+}
+
+/// The daemon's exit ends a wait the daemon never took.
+@MainActor
+@Test func waitEndsWhenTheDaemonExits() async throws {
+    var pending: [ControlReply] = []
+    let server = makeServer { _, reply in pending.append(reply) }
+    defer {
+        xpc_connection_cancel(server.listener)
+        pending.forEach { $0.close() }
+    }
+    let outcome = ExchangeOutcome()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { outcome.set(.exited) }
+    let result = try await runOnThread {
+        try ControlClient.waitUntilReady(over: xpc_connection_create_from_endpoint(server.endpoint),
+                                         timeout: .seconds(5), outcome: outcome)
+    }
+    guard case .exited = result else {
+        Issue.record("did not see the exit")
+        return
+    }
+}
+
+/// A reply this version can't decode is an error, not a closed connection.
+@MainActor
+@Test func undecodableReplyThrows() async throws {
+    let server = makeServer { _, reply in reply.send(Data(#"{"state":1}"#.utf8)) }
+    defer { xpc_connection_cancel(server.listener) }
+    await #expect(throws: (any Error).self) {
+        try await waitUntilReady(endpoint: server.endpoint, timeout: .seconds(5))
+    }
+}
+
+@Test func peerRequirementAddsTheTeamWhenSigned() {
+    #expect(CodeSigning.requirement(forPeer: "io.dockma.cli", team: nil) == #"identifier "io.dockma.cli""#)
+    #expect(CodeSigning.requirement(forPeer: "io.dockma.cli", team: "ABCDE12345")
+        == #"identifier "io.dockma.cli" and anchor apple generic and certificate leaf[subject.OU] = "ABCDE12345""#)
 }
 
 /// Serves one HTTP `response` per connection on a unix socket at `path`.
@@ -88,20 +143,4 @@ private func fakeDocker(path: String, response: String) throws -> SocketListener
     #expect(await runOnThread { DockerPing.isResponding(socketPath: healthy) })
     #expect(await runOnThread { !DockerPing.isResponding(socketPath: failing) })
     #expect(await runOnThread { !DockerPing.isResponding(socketPath: makeSocketPath()) })
-}
-
-/// A daemon whose reply doesn't decode is still a running daemon, not none.
-@MainActor
-@Test func daemonWithAnUndecodableReplyIsAnswering() async throws {
-    let root = URL(fileURLWithPath: "/tmp/dockma-test-\(UUID().uuidString.prefix(8))")
-    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-    defer { try? FileManager.default.removeItem(at: root) }
-    let paths = Paths(root: root, home: root)
-    let listener = try ControlServer.listen(path: paths.controlSocket.path) { _, reply in reply.send(Data(#"{"state":1}"#.utf8)) }
-    defer { listener.cancel() }
-    let (answering, decodes) = try await runOnThread {
-        (ControlClient.isDaemonAnswering(paths: paths), (try? ControlClient.status(paths: paths)) != nil)
-    }
-    #expect(answering)
-    #expect(!decodes)
 }

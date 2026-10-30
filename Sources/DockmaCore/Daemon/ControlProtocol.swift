@@ -1,6 +1,8 @@
 import Foundation
+// XPC objects are thread-safe, but the module predates Sendable.
+@preconcurrency import XPC
 
-/// CLI → daemon request on ~/.dockma/control.sock (one JSON line each way).
+/// CLI → daemon request, sent as JSON in an XPC message (`ControlMessage`).
 public struct ControlRequest: Codable, Sendable {
     /// `wait` is answered with a `DaemonStatus` once Docker is ready, and
     /// closed without a reply if the daemon stops first.
@@ -45,120 +47,263 @@ public struct DaemonStatus: Codable, Equatable, Sendable {
     }
 }
 
-/// Talks to a running daemon. Every call fails fast when none is listening.
+/// Talks to the daemon over its launchd Mach service, which is named after
+/// the job label (`LaunchAgent.label(for:)`).
 public enum ControlClient {
-    /// Whether a daemon answers a status request, even with a reply this
-    /// version can't decode. A socket round trip with a 5 s timeout.
-    public static func isDaemonAnswering(paths: Paths) -> Bool {
-        (try? roundTrip(paths: paths, request: ControlRequest(command: .status))) != nil
-    }
-
-    public static func status(paths: Paths) throws -> DaemonStatus {
-        let data = try roundTrip(paths: paths, request: ControlRequest(command: .status))
-        let decoder = JSONDecoder()
-        return try decoder.decode(DaemonStatus.self, from: data)
-    }
-
-    public static func stop(paths: Paths) throws {
-        _ = try roundTrip(paths: paths, request: ControlRequest(command: .stop))
+    /// The daemon's status, or nil when its job has no process. Throws when
+    /// a running daemon doesn't answer or its reply doesn't decode: it is
+    /// another version, or one of the two signatures doesn't match.
+    public static func status(paths: Paths) throws -> DaemonStatus? {
+        // A lookup of a loaded job whose process exited makes launchd start
+        // it again, booting the VM; check first. A daemon that exits between
+        // the check and the lookup can still be restarted this way.
+        guard LaunchAgent(paths: paths).state().pid != nil else { return nil }
+        switch exchange(ControlRequest(command: .status), over: makeConnection(paths: paths), timeout: .seconds(5)) {
+        case .reply(let data): return try JSONDecoder().decode(DaemonStatus.self, from: data)
+        case .closed, .exited: throw DockmaError("the dockma daemon closed the control connection")
+        case .timedOut: throw DockmaError("the dockma daemon did not answer")
+        }
     }
 
     /// How a `wait` request ended.
     public enum WaitOutcome: Sendable {
         /// Docker is ready.
         case ready(DaemonStatus)
-        /// The daemon closed the connection without replying: it exited or
-        /// is stopping, or it is too old to know `wait`.
+        /// The daemon's process exited, or launchd reports the job gone.
+        case exited
+        /// The connection ended without a reply: the daemon is stopping or
+        /// exited, it is too old to serve XPC, or a signature check failed.
         case closed
         /// Nothing arrived within the timeout.
         case timedOut
     }
 
-    /// Asks the daemon on an already connected `fd` to reply once Docker is
-    /// ready, and blocks until it does, closes, or `timeout` passes. Takes
-    /// ownership of `fd`.
-    public static func waitUntilReady(fd: Int32, timeout: Duration) throws -> WaitOutcome {
-        defer { close(fd) }
-        guard writeAll(try jsonLine(ControlRequest(command: .wait)), to: fd) else {
-            // The daemon went away between connect and write.
-            return .closed
-        }
-        var pending = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-        var ready: Int32
-        repeat {
-            ready = poll(&pending, 1, Int32(clamping: max(0, Int(timeout / .milliseconds(1)))))
-        } while ready < 0 && errno == EINTR
-        guard ready > 0 else { return .timedOut }
-        // Readable means a reply or EOF, and the reply is a single short line.
-        guard let line = LineReader(fd: fd).readLine() else { return .closed }
-        return .ready(try JSONDecoder().decode(DaemonStatus.self, from: line))
+    /// Asks the daemon to reply once Docker is ready, and blocks until it
+    /// does, the connection ends, its process exits, or `timeout` passes.
+    /// launchd queues the request until the daemon checks in, and starts a
+    /// loaded job that isn't running.
+    public static func waitUntilReady(paths: Paths, timeout: Duration) throws -> WaitOutcome {
+        let outcome = ExchangeOutcome()
+        // A daemon that fails before it takes the request leaves it queued,
+        // and no error reaches this side; the exit is the only sign.
+        let watch = DaemonExitWatch(agent: LaunchAgent(paths: paths)) { outcome.set(.exited) }
+        defer { watch.stop() }
+        return try waitUntilReady(over: makeConnection(paths: paths), timeout: timeout, outcome: outcome)
     }
 
-    static func roundTrip(paths: Paths, request: ControlRequest) throws -> Data {
-        let fd = try UnixSocket.connect(path: paths.controlSocket.path, timeoutSeconds: 5)
-        defer { close(fd) }
-        guard writeAll(try jsonLine(request), to: fd) else { throw DockmaError.posix("write control socket") }
-        guard let line = LineReader(fd: fd).readLine() else {
-            throw DockmaError("daemon closed the control connection")
+    /// `waitUntilReady(paths:timeout:)` on the given unactivated `connection`.
+    static func waitUntilReady(over connection: xpc_connection_t, timeout: Duration,
+                               outcome: ExchangeOutcome = ExchangeOutcome()) throws -> WaitOutcome {
+        switch exchange(ControlRequest(command: .wait), over: connection, timeout: timeout, outcome: outcome) {
+        case .reply(let data): return .ready(try JSONDecoder().decode(DaemonStatus.self, from: data))
+        case .closed: return .closed
+        case .exited: return .exited
+        case .timedOut: return .timedOut
         }
-        return line
+    }
+
+    /// A connection to the daemon of `paths` that accepts only a peer signed
+    /// as the daemon.
+    static func makeConnection(paths: Paths) -> xpc_connection_t {
+        let connection = xpc_connection_create_mach_service(LaunchAgent.label(for: paths), nil, 0)
+        ControlPeer.require(CodeSigning.daemonIdentifier, on: connection)
+        return connection
+    }
+
+    /// How one request ended.
+    enum Exchange: Equatable {
+        case reply(Data)
+        case closed
+        /// Set from outside the exchange, by a `DaemonExitWatch`.
+        case exited
+        case timedOut
+    }
+
+    /// Sends `request` on the unactivated `connection`, waits for the reply
+    /// or another result set on `outcome`, and cancels the connection.
+    static func exchange(_ request: ControlRequest, over connection: xpc_connection_t, timeout: Duration,
+                         outcome: ExchangeOutcome = ExchangeOutcome()) -> Exchange {
+        // A private serial queue, not global(): the caller blocks below, and
+        // global() shares its threads with the cooperative pool.
+        let queue = DispatchQueue(label: "io.dockma.control-client")
+        xpc_connection_set_target_queue(connection, queue)
+        // Errors also arrive as the reply, which is all this needs.
+        xpc_connection_set_event_handler(connection) { _ in }
+        xpc_connection_activate(connection)
+        defer { xpc_connection_cancel(connection) }
+
+        let message = xpc_dictionary_create(nil, nil, 0)
+        guard let json = try? JSONEncoder().encode(request) else { return .closed }
+        ControlMessage.setJSON(json, in: message)
+        xpc_connection_send_message_with_reply(connection, message, queue) { reply in
+            outcome.set(ControlMessage.json(in: reply).map(Exchange.reply) ?? .closed)
+        }
+        return outcome.wait(timeout: timeout) ?? .timedOut
     }
 }
 
-/// The pending reply to one control request. It owns the client descriptor
-/// until `send(_:)` or `close()`; a request that is never answered stays
-/// open, so the owner must eventually call one of them.
-@MainActor
-public final class ControlReply {
-    private var fd: Int32
+/// The result of one exchange, handed from the reply handler or an exit
+/// watch to the caller. The first result wins.
+final class ExchangeOutcome: @unchecked Sendable {
+    private let lock = NSLock()
+    private let done = DispatchSemaphore(value: 0)
+    private var value: ControlClient.Exchange?
 
-    /// Takes ownership of the client descriptor `fd`.
-    init(fd: Int32) {
-        self.fd = fd
+    /// Stores the result, unless one is already stored, and wakes the caller.
+    func set(_ value: ControlClient.Exchange) {
+        let isFirst = lock.withLock {
+            guard self.value == nil else { return false }
+            self.value = value
+            return true
+        }
+        if isFirst { done.signal() }
     }
 
-    /// Writes `data` as one line and closes the connection.
-    public func send(_ data: Data) {
-        guard fd >= 0 else { return }
-        var line = data
-        line.append(UInt8(ascii: "\n"))
-        writeAll(line, to: fd)
-        close()
-    }
-
-    /// Closes the connection without a reply; the client reads EOF.
-    public func close() {
-        guard fd >= 0 else { return }
-        Darwin.close(fd)
-        fd = -1
+    /// The result, or nil if none arrives within `timeout`.
+    func wait(timeout: Duration) -> ControlClient.Exchange? {
+        guard done.wait(timeout: .now() + timeout / .seconds(1)) == .success else { return nil }
+        return lock.withLock { value }
     }
 }
 
-/// Serves the control socket; `respond` runs on the main actor and answers
-/// through the `ControlReply`, at once or later.
-@MainActor
-public enum ControlServer {
-    public static func listen(path: String, respond: @escaping @MainActor (ControlRequest, ControlReply) -> Void) throws -> SocketListener {
-        try SocketListener.unix(path: path) { client in
-            // Read off the accept loop, so a client that sends nothing can't
-            // hold up the others for the 5 s timeout.
-            // A thread, not global(): the read blocks, and global() workers
-            // also run the accept and UDP read sources. Threads aren't capped,
-            // but only the user's own processes can connect (mode 0600) and
-            // each thread ends within the 5 s timeout.
-            Thread.detachNewThread {
-                SocketOptions.setTimeout(seconds: 5, on: client)
-                guard let line = LineReader(fd: client).readLine(),
-                      let request = try? JSONDecoder().decode(ControlRequest.self, from: line)
-                else {
-                    close(client)
-                    return
+/// Watches a job's daemon on a thread of its own and calls `onExit` once,
+/// when its process exits or launchd reports the job gone.
+private final class DaemonExitWatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isStopped = false
+
+    /// Starts watching the daemon of `agent`, whose process may not exist yet.
+    init(agent: LaunchAgent, onExit: @escaping @Sendable () -> Void) {
+        Thread.detachNewThread { [self] in
+            guard let events = try? KernelEvents() else { return }
+            var isWatchingExit = false
+            while !lock.withLock({ isStopped }) {
+                if !isWatchingExit {
+                    let job = agent.state()
+                    if job.hasExited { return onExit() }
+                    if let pid = job.pid {
+                        guard events.watchExit(ofProcess: pid) else { return onExit() }
+                        isWatchingExit = true
+                    }
                 }
-                Task { @MainActor in
-                    respond(request, ControlReply(fd: client))
+                // Until the pid is known, launchd is asked again each round.
+                if events.wait(timeout: isWatchingExit ? .seconds(1) : .milliseconds(200)) == .processExited {
+                    return onExit()
                 }
             }
         }
+    }
+
+    /// Stops watching within a second; `onExit` isn't called after that.
+    func stop() {
+        lock.withLock { isStopped = true }
+    }
+}
+
+/// The peer check both ends of the control connection set.
+enum ControlPeer {
+    /// Makes the unactivated `connection` accept only a peer signed as
+    /// `identifier`. Stops the process if the requirement doesn't take: the
+    /// connection must not accept any peer instead, and an inactive one
+    /// can't be safely released.
+    static func require(_ identifier: String, on connection: xpc_connection_t) {
+        let requirement = CodeSigning.requirement(forPeer: identifier)
+        precondition(xpc_connection_set_peer_code_signing_requirement(connection, requirement) == 0,
+                     "invalid code signing requirement: \(requirement)")
+    }
+}
+
+/// The control payload in an XPC message: the request's or reply's JSON as
+/// data under one key.
+enum ControlMessage {
+    static let key = "json"
+
+    /// Stores `json` in the dictionary `message`.
+    static func setJSON(_ json: Data, in message: xpc_object_t) {
+        json.withUnsafeBytes { xpc_dictionary_set_data(message, key, $0.baseAddress!, $0.count) }
+    }
+
+    /// The JSON in `message`, or nil for an error or a message without it.
+    static func json(in message: xpc_object_t) -> Data? {
+        guard xpc_get_type(message) == XPC_TYPE_DICTIONARY else { return nil }
+        var length = 0
+        guard let bytes = xpc_dictionary_get_data(message, key, &length) else { return nil }
+        return Data(bytes: bytes, count: length)
+    }
+}
+
+/// The pending reply to one control request. A request that is never
+/// answered stays pending, so the owner must eventually call `send(_:)` or
+/// `close()`.
+@MainActor
+public final class ControlReply {
+    private var peer: xpc_connection_t?
+    private let request: xpc_object_t
+
+    /// The reply to `request`, which arrived on `peer`.
+    init(peer: xpc_connection_t, request: xpc_object_t) {
+        self.peer = peer
+        self.request = request
+    }
+
+    /// Sends `data` as the reply.
+    public func send(_ data: Data) {
+        guard let peer, let reply = xpc_dictionary_create_reply(request) else { return }
+        ControlMessage.setJSON(data, in: reply)
+        xpc_connection_send_message(peer, reply)
+        self.peer = nil
+    }
+
+    /// Ends the connection without a reply; the client sees it close.
+    public func close() {
+        guard let peer else { return }
+        xpc_connection_cancel(peer)
+        self.peer = nil
+    }
+}
+
+/// Serves control requests; `respond` runs on the main actor and answers
+/// through the `ControlReply`, at once or later.
+@MainActor
+public enum ControlServer {
+    /// Checks in the launchd Mach service `name`, admitting only clients
+    /// signed as the dockma CLI. Returns the listener, which the caller
+    /// cancels to stop serving.
+    public static func listen(machService name: String, respond: @escaping @MainActor (ControlRequest, ControlReply) -> Void) -> xpc_connection_t {
+        let listener = xpc_connection_create_mach_service(name, .main, UInt64(XPC_CONNECTION_MACH_SERVICE_LISTENER))
+        ControlPeer.require(CodeSigning.cliIdentifier, on: listener)
+        serve(listener, respond: respond)
+        return listener
+    }
+
+    /// Activates the unactivated `listener`, whose target queue is the main
+    /// queue, and hands each request of each peer to `respond`.
+    static func serve(_ listener: xpc_connection_t, respond: @escaping @MainActor (ControlRequest, ControlReply) -> Void) {
+        xpc_connection_set_event_handler(listener) { peer in
+            guard xpc_get_type(peer) == XPC_TYPE_CONNECTION else {
+                // The service can't be checked in, or the listener was cancelled.
+                Log.info("control listener: \(ControlServer.errorDescription(peer))")
+                return
+            }
+            xpc_connection_set_target_queue(peer, .main)
+            xpc_connection_set_event_handler(peer) { message in
+                // Errors only mean this client went away or was refused.
+                guard let json = ControlMessage.json(in: message) else { return }
+                MainActor.assumeIsolated {
+                    guard let request = try? JSONDecoder().decode(ControlRequest.self, from: json) else {
+                        return xpc_connection_cancel(peer)
+                    }
+                    respond(request, ControlReply(peer: peer, request: message))
+                }
+            }
+            xpc_connection_activate(peer)
+        }
+        xpc_connection_activate(listener)
+    }
+
+    /// The description of an XPC error object.
+    nonisolated static func errorDescription(_ error: xpc_object_t) -> String {
+        xpc_dictionary_get_string(error, XPC_ERROR_KEY_DESCRIPTION).map { String(cString: $0) } ?? "unknown error"
     }
 }
 

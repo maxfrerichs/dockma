@@ -1,7 +1,8 @@
 import Foundation
+import XPC
 
 /// The long-lived process behind the launchd job: boots the VM and serves the
-/// docker socket, port forwards and control socket until asked to stop.
+/// docker socket, port forwards and control service until asked to stop.
 @MainActor
 public final class Daemon {
     /// How long the guest gets to power off before the VM is stopped hard.
@@ -26,6 +27,9 @@ public final class Daemon {
     private var ports: PortForwarder?
     private var files: FileWatcher?
     private var listeners: [SocketListener] = []
+    /// Open until the process exits, so `status` answers `stopping` during a
+    /// stop instead of leaving the client waiting.
+    private var controlListener: xpc_connection_t?
     /// `wait` requests to answer once Docker is ready.
     private var readyWaiters: [ControlReply] = []
     private var signalSources: [DispatchSourceSignal] = []
@@ -91,15 +95,14 @@ public final class Daemon {
 
     private func boot() throws {
         try Paths.validateSocketPath(paths.dockerSocket)
-        try Paths.validateSocketPath(paths.controlSocket)
         try Paths.validateSocketPath(paths.shellSocket)
 
-        // Listen first: a `dockma start` waiting on this socket then sees
+        // Listen first: a `dockma start` waiting on the service then sees
         // every later startup failure as the connection closing.
-        listeners.append(try ControlServer.listen(path: paths.controlSocket.path) { [weak self] request, reply in
+        controlListener = ControlServer.listen(machService: LaunchAgent.label(for: paths)) { [weak self] request, reply in
             guard let self else { return reply.close() }
             self.handle(request, reply: reply)
-        })
+        }
 
         config = try Config.load(from: paths.config)
         try config.validate()
@@ -289,8 +292,9 @@ public final class Daemon {
         let now = ContinuousClock.now
         stopRequestedAt = now
         state = .stopping
-        // New connections are refused from here on; the agent connection
-        // stays open to deliver the shutdown request.
+        // New connections are refused from here on, except control requests
+        // (`wait` is closed); the agent connection stays open to deliver the
+        // shutdown request.
         closeListeners()
 
         guard let host, host.isRunning else {
@@ -355,7 +359,8 @@ public final class Daemon {
         stopRequested ? 0 : 1
     }
 
-    /// Closes forwarded ports, file watching, every listener and pending `wait` requests.
+    /// Closes forwarded ports, file watching, every socket listener and
+    /// pending `wait` requests.
     private func closeListeners() {
         ports?.removeAll()
         files?.stop()
@@ -419,7 +424,7 @@ public final class Daemon {
     }
 
     /// Takes an exclusive lock that is held for the life of the process, so a
-    /// second daemon (say `dockma daemon` by hand next to the launchd job)
+    /// second daemon (say the job of an older dockma next to this one)
     /// can't boot another VM on the same data disk. Returns the descriptor.
     nonisolated static func acquireLock(at url: URL) throws -> Int32 {
         try FileLock.acquire(at: url, busyMessage: "another dockma daemon is running")

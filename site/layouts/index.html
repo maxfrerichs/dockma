@@ -80,14 +80,14 @@
 
 <section aria-labelledby="how">
   <h2 id="how">How it works</h2>
-  <div class="arch" role="img" aria-label="Architecture diagram: the docker CLI, the dockma CLI and apps using published localhost ports talk to the dockma daemon on macOS, which forwards them over vsock to dockma-agent in the Linux guest; the agent reaches dockerd, docker-proxy and /bin/sh. $HOME and Rosetta are shared via virtiofs, the data disk via virtio-blk.">
+  <div class="arch" role="img" aria-label="Architecture diagram: the docker CLI, the dockma CLI and apps using published localhost ports talk to dockmad, the dockma daemon on macOS, which forwards them over vsock to dockma-agent in the Linux guest; the agent reaches dockerd, docker-proxy and /bin/sh. $HOME and Rosetta are shared via virtiofs, the data disk via virtio-blk.">
     <div class="arch-box">
       <span class="arch-label">macOS</span>
       <div class="arch-chips"><span>docker</span><span>dockma</span><span>localhost:P</span></div>
     </div>
     <span class="arch-arrow">▼</span>
     <div class="arch-box accent">
-      <strong>dockma daemon</strong>
+      <strong>dockmad</strong>
       <span class="arch-sub">launchd job · owns the VM</span>
     </div>
     <div class="arch-bus"><span>vsock</span></div>

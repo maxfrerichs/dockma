@@ -57,7 +57,7 @@ import Testing
 
 @Test func shutdownGraceEndsBeforeLaunchdKillsTheDaemon() throws {
     let paths = Paths(root: URL(fileURLWithPath: "/tmp/dockma-plist"), home: URL(fileURLWithPath: "/tmp"))
-    let data = try LaunchAgent(paths: paths, executable: "/bin/dockma").plist(autostart: false)
+    let data = try LaunchAgent(paths: paths, executable: "/bin/dockmad").plist(autostart: false)
     let plist = try #require(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
     let exitTimeOut = try #require(plist["ExitTimeOut"] as? Int)
     #expect(Daemon.shutdownGrace < .seconds(exitTimeOut))

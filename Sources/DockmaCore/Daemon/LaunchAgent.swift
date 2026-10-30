@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// Manages the per-user launchd job that runs `dockma daemon`.
+/// Manages the per-user launchd job that runs `dockmad`.
 public struct LaunchAgent: Sendable {
     /// The job label of the default state directory. A frozen name: launchd
     /// and installed plists know the job by it.
@@ -12,6 +12,11 @@ public struct LaunchAgent: Sendable {
     /// The job's label, distinct per state directory.
     public let label: String
 
+    /// The job of `paths`, running the `dockmad` beside this executable.
+    public init(paths: Paths) {
+        self.init(paths: paths, executable: Self.daemonExecutable)
+    }
+
     public init(paths: Paths, executable: String) {
         self.init(paths: paths, executable: executable, label: Self.label(for: paths))
     }
@@ -20,6 +25,22 @@ public struct LaunchAgent: Sendable {
         self.paths = paths
         self.executable = executable
         self.label = label
+    }
+
+    /// The `dockmad` beside this executable. Checks the file system.
+    public static var daemonExecutable: String {
+        daemonExecutable(besideCLI: Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0]))
+    }
+
+    /// The `dockmad` beside the CLI at `url`. A symlink the CLI was run
+    /// through is kept when `dockmad` sits beside it: package managers point a
+    /// stable link (`/opt/homebrew/bin/dockma`) at a versioned directory an
+    /// upgrade deletes. A link made by hand to the CLI alone falls back to
+    /// the `dockmad` beside its target. Checks the file system.
+    static func daemonExecutable(besideCLI url: URL) -> String {
+        let beside = url.standardizedFileURL.deletingLastPathComponent().appendingPathComponent("dockmad")
+        if FileManager.default.fileExists(atPath: beside.path) { return beside.path }
+        return url.resolvingSymlinksInPath().deletingLastPathComponent().appendingPathComponent("dockmad").path
     }
 
     /// The label for the job of `paths`: the default label for `~/.dockma`,
@@ -42,15 +63,17 @@ public struct LaunchAgent: Sendable {
     }
 
     /// The daemon exits 0 after a requested shutdown and non-zero when the
-    /// VM died unexpectedly, which launchd answers with a restart.
+    /// VM died unexpectedly, which launchd answers with a restart. The Mach
+    /// service, named like the job, carries the CLI's control requests.
     public func plist(autostart: Bool) throws -> Data {
         var environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
         if let custom = ProcessInfo.processInfo.environment["DOCKMA_HOME"] {
             environment["DOCKMA_HOME"] = custom
         }
-        let dict: [String: Any] = [
+        var dict: [String: Any] = [
             "Label": label,
-            "ProgramArguments": [executable, "daemon"],
+            "ProgramArguments": [executable],
+            "MachServices": [label: true],
             "RunAtLoad": true,
             "KeepAlive": ["SuccessfulExit": false],
             "ExitTimeOut": 30,
@@ -60,6 +83,12 @@ public struct LaunchAgent: Sendable {
             "StandardErrorPath": paths.daemonLog.path,
             "EnvironmentVariables": environment,
         ]
+        // For debugging boot: launchd starts the daemon suspended until a
+        // debugger attaches, since only launchd can run it. Never at login,
+        // where nobody would attach and the VM would silently not start.
+        if !autostart, ProcessInfo.processInfo.environment["DOCKMA_WAIT_FOR_DEBUGGER"] == "1" {
+            dict["WaitForDebugger"] = true
+        }
         return try PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0)
     }
 

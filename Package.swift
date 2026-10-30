@@ -7,6 +7,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .executable(name: "dockma", targets: ["DockmaCLI"]),
+        .executable(name: "dockmad", targets: ["DockmaDaemon"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.8.0"),
@@ -25,6 +26,15 @@ let package = Package(
                 "DockmaCore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
+            swiftSettings: [
+                .enableUpcomingFeature("ApproachableConcurrency"),
+            ],
+        ),
+        // The launchd job that owns the VM; the only binary with the
+        // virtualization entitlement.
+        .executableTarget(
+            name: "DockmaDaemon",
+            dependencies: ["DockmaCore"],
             swiftSettings: [
                 .enableUpcomingFeature("ApproachableConcurrency"),
             ],

@@ -68,15 +68,48 @@ import Testing
 
 @Test func launchAgentPlistRunsDaemon() throws {
     let paths = Paths(root: URL(fileURLWithPath: "/Users/x/.dockma"), home: URL(fileURLWithPath: "/Users/x"))
-    let agent = LaunchAgent(paths: paths, executable: "/opt/dockma/bin/dockma")
+    let agent = LaunchAgent(paths: paths, executable: "/opt/dockma/bin/dockmad")
     let data = try agent.plist(autostart: false)
     let plist = try #require(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
     #expect(plist["Label"] as? String == "io.dockma.daemon")
-    #expect(plist["ProgramArguments"] as? [String] == ["/opt/dockma/bin/dockma", "daemon"])
+    #expect(plist["ProgramArguments"] as? [String] == ["/opt/dockma/bin/dockmad"])
+    // The CLI reaches the daemon through the Mach service named like the job.
+    #expect(plist["MachServices"] as? [String: Bool] == ["io.dockma.daemon": true])
     #expect((plist["KeepAlive"] as? [String: Bool])?["SuccessfulExit"] == false)
     #expect(plist["StandardErrorPath"] as? String == "/Users/x/.dockma/logs/daemon.log")
     #expect(agent.plistURL(autostart: true).path == "/Users/x/Library/LaunchAgents/io.dockma.daemon.plist")
     #expect(agent.plistURL(autostart: false).path == "/Users/x/.dockma/io.dockma.daemon.plist")
+}
+
+@Test func dockmadIsFoundBesideTheLinkOrItsTarget() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("dockma-link-\(UUID().uuidString)")
+    let real = root.appendingPathComponent("real"), byHand = root.appendingPathComponent("byhand")
+    let managed = root.appendingPathComponent("managed")
+    for dir in [real, byHand, managed] { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
+    defer { try? FileManager.default.removeItem(at: root) }
+    for name in ["dockma", "dockmad"] { FileManager.default.createFile(atPath: real.appendingPathComponent(name).path, contents: nil) }
+    // A package manager links both binaries; a link made by hand only the CLI.
+    for (dir, names) in [(managed, ["dockma", "dockmad"]), (byHand, ["dockma"])] {
+        for name in names {
+            try FileManager.default.createSymbolicLink(at: dir.appendingPathComponent(name), withDestinationURL: real.appendingPathComponent(name))
+        }
+    }
+    let resolvedReal = real.resolvingSymlinksInPath().appendingPathComponent("dockmad").path
+    #expect(LaunchAgent.daemonExecutable(besideCLI: managed.appendingPathComponent("dockma")) == managed.appendingPathComponent("dockmad").path)
+    #expect(LaunchAgent.daemonExecutable(besideCLI: byHand.appendingPathComponent("dockma")) == resolvedReal)
+}
+
+@Test func autostartPlistNeverWaitsForADebugger() throws {
+    setenv("DOCKMA_WAIT_FOR_DEBUGGER", "1", 1)
+    defer { unsetenv("DOCKMA_WAIT_FOR_DEBUGGER") }
+    let paths = Paths(root: URL(fileURLWithPath: "/Users/x/.dockma"), home: URL(fileURLWithPath: "/Users/x"))
+    let agent = LaunchAgent(paths: paths, executable: "/x/dockmad")
+    func waits(autostart: Bool) throws -> Bool {
+        let plist = try PropertyListSerialization.propertyList(from: agent.plist(autostart: autostart), format: nil) as? [String: Any]
+        return plist?["WaitForDebugger"] as? Bool == true
+    }
+    #expect(try waits(autostart: false))
+    #expect(try !waits(autostart: true))
 }
 
 @Test func launchAgentLabelIsPerStateDirectory() {

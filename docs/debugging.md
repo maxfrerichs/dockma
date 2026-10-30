@@ -19,16 +19,15 @@ In VS Code, install the recommended extensions (Swift, Go). The debug configurat
 
 | Launch configuration | Use it to |
 |---|---|
-| **Daemon (debug VM)** | Run `dockma daemon` in the foreground under lldb; it boots the VM by itself. Its pre-launch task builds, signs, and stops the debug VM's launchd job, which would hold `daemon.lock`. Don't run `dockma start` against it: `start` sees a daemon outside launchd and returns without waiting. |
 | **CLI (debug VM)** | Run one subcommand (`start`, `status`, `stop`) under lldb. |
-| **Attach to daemon (launchd)** | Wait for the next `dockma daemon` process and attach. Start it, then run the task **debug VM: start**: this debugs the daemon as launchd runs it. |
+| **Attach to daemon (launchd)** | Wait for the next `dockmad` process and attach. Start it, then run the task **debug VM: start**. `dockmad` runs only as a launchd job, because launchd hands its XPC service to no other process, so this is the way to debug the daemon. |
 | **Agent (Delve in the debug VM)** | Attach to the agent. Get the address from the task **debug VM: guest IP**. |
 
 To debug the agent's startup (`hello`, the first `ports` and `watch`), run the task **debug VM: agent waits for debugger**. The agent restarts and stops before `main` until you attach and continue. **debug VM: agent runs at once** undoes it. Both kill `dlv`, and init starts it again; the wrapper reads `agent-debug-wait` in the state directory.
 
 ## Hazards
 
-- **A breakpoint in the daemon stops its main actor.** The VM keeps running, but `control.sock`, the agent's messages and new forwards wait. Deadlines run on a continuous clock: a stop requested before the pause hard-stops the VM right after you continue ([`Daemon.scheduleForceStop`](../Sources/DockmaCore/Daemon/Daemon.swift)).
+- **A breakpoint in the daemon stops its main actor.** The VM keeps running, but control requests, the agent's messages and new forwards wait. Deadlines run on a continuous clock: a stop requested before the pause hard-stops the VM right after you continue ([`Daemon.scheduleForceStop`](../Sources/DockmaCore/Daemon/Daemon.swift)).
 - **A paused agent stops everything that runs through it:** the Docker socket, port tunnels, DNS for containers, and `dockma shell`. Read guest state before you pause it, or from a shell opened before.
 - **Stopping the debugger kills the daemon, and with it the VM,** without a clean shutdown. The data disk is checked at the next boot; nothing is lost that dockerd had synced.
 - **Delve listens on all addresses in the VM.** Whatever reaches port 2345 is root in the VM, containers included. Run only containers you trust in the debug VM. Release guests never contain Delve.
@@ -48,14 +47,13 @@ The CLI and the daemon are two processes, so this tour has two parts. Start each
 |---|---|---|
 | 1 | [`Start.run`](../Sources/DockmaCLI/Dockma.swift) | `paths`: the state directory comes from `DOCKMA_HOME`. |
 | 2 | [`Start.loadJob`](../Sources/DockmaCLI/Dockma.swift) | Which of the job's states it finds; a stopped VM ends in [`LaunchAgent.install`](../Sources/DockmaCore/Daemon/LaunchAgent.swift). |
-| 3 | [`Start.connectToDaemon`](../Sources/DockmaCLI/Dockma.swift) | How it waits for `control.sock`: kqueue on the state directory, with a 1 s fallback until the daemon's pid is known. |
-| 4 | [`ControlClient.waitUntilReady`](../Sources/DockmaCore/Daemon/ControlProtocol.swift) | One `wait` request; the reply comes only once Docker is ready, or the connection closes. |
+| 3 | [`ControlClient.waitUntilReady`](../Sources/DockmaCore/Daemon/ControlProtocol.swift) | One `wait` request on the job's XPC service; launchd holds it until the daemon checks in. The reply comes only once Docker is ready, or the connection closes. |
 
-**The daemon.** Launch **Daemon (debug VM)**; it boots the VM itself. To also step through the agent's side, first run **debug VM: agent waits for debugger**, then attach **Agent (Delve in the debug VM)** once the VM has booted.
+**The daemon.** Run the task **debug VM: start, daemon waits for debugger** (`DOCKMA_WAIT_FOR_DEBUGGER=1` makes launchd start `dockmad` suspended), then launch **Attach to daemon (launchd)** and continue. To also step through the agent's side, first run **debug VM: agent waits for debugger**, then attach **Agent (Delve in the debug VM)** once the VM has booted.
 
 | Stop | Where | Look at |
 |---|---|---|
-| 1 | [`Daemon.boot`](../Sources/DockmaCore/Daemon/Daemon.swift) | The control socket listens before anything can fail. `built.configuration`: CPUs, memory, devices. |
+| 1 | [`Daemon.boot`](../Sources/DockmaCore/Daemon/Daemon.swift) | The control service is checked in before anything can fail. `built.configuration`: CPUs, memory, devices. |
 | 2 | [`KernelCmdline.commandLine`](../Sources/DockmaCore/VM/KernelCmdline.swift) | The guest's command line: `dockma.home=`, `dockma.state=`, `panic=5`. |
 | 3 | [`Daemon.vmStarted`](../Sources/DockmaCore/Daemon/Daemon.swift) | The Docker and shell sockets are served before the agent connects. |
 | 4 | [`main`](../vm/agent/main.go) (agent) | With the wait file, Delve holds the agent here. Its servers start before it dials the host. |
@@ -63,7 +61,7 @@ The CLI and the daemon are two processes, so this tour has two parts. Start each
 | 6 | [`AgentClient.accept`](../Sources/DockmaCore/Agent/AgentClient.swift) | The agent dialed in; a reader thread per connection. |
 | 7 | [`AgentClient.handle`](../Sources/DockmaCore/Agent/AgentClient.swift) | `message.type` for each line; `sender == fd` drops a replaced connection's late lines. |
 | 8 | [`portWatcher.setDockerReady`](../vm/agent/portwatcher.go) (agent) | Readiness flips once the `/events` stream opens. |
-| 9 | [`Daemon.answerReadyWaiters`](../Sources/DockmaCore/Daemon/Daemon.swift) | Answers each pending `wait`. Under the foreground daemon nobody waits, so `readyWaiters` is empty; in the CLI part it holds the CLI's request. |
+| 9 | [`Daemon.answerReadyWaiters`](../Sources/DockmaCore/Daemon/Daemon.swift) | Answers each pending `wait`; `readyWaiters` holds the request of **debug VM: start**. |
 
 ### A published port
 
@@ -113,11 +111,11 @@ The code behind these lines is [`dn_write`](../vm/kernel/dockma_notify.c) and [`
 
 ### Stop
 
-Trigger: with the daemon under **Daemon (debug VM)**, run the task **debug VM: stop**. A foreground daemon has no launchd job, so `stop` sends its request over `control.sock`.
+Trigger: with **Attach to daemon (launchd)** attached, run the task **debug VM: stop**. `stop` boots the job out, and launchd sends SIGTERM.
 
 | Stop | Where | Look at |
 |---|---|---|
-| 1 | [`Daemon.handle`](../Sources/DockmaCore/Daemon/Daemon.swift) | `.stop`: the reply is written before `requestStop` runs. |
+| 1 | [`Daemon.start`](../Sources/DockmaCore/Daemon/Daemon.swift) | The SIGTERM source calls `requestStop`. |
 | 2 | [`Daemon.requestStop`](../Sources/DockmaCore/Daemon/Daemon.swift) | Forwards and listeners close; `isShutdownSent` picks the deadline. |
 | 3 | [`Daemon.forceStopDeadline`](../Sources/DockmaCore/Daemon/Daemon.swift) | 25 s after the request with an agent, 2 s without. |
 | 4 | [`handleControl`](../vm/agent/control.go) (agent) | `shutdown` runs `poweroff`; init then runs [`shutdown`](../vm/rootfs/etc/init.d/shutdown). |

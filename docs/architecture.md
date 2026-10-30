@@ -18,12 +18,11 @@ flowchart LR
     launchd["launchd job io.dockma.daemon"]
     subgraph statedir["~/.dockma"]
       dsock["docker.sock"]
-      csock["control.sock"]
       ssock["shell.sock"]
       files["config.json, data.img, guest/, logs/"]
     end
     published["published ports on 127.0.0.1"]
-    daemon["dockma daemon<br/>owns the VZVirtualMachine"]
+    daemon["dockmad<br/>owns the VZVirtualMachine"]
   end
   subgraph guest["Linux guest"]
     agent["dockma-agent"]
@@ -32,9 +31,9 @@ flowchart LR
     containers["containers"]
   end
   dockercli --> dsock --> daemon
-  cli --> csock --> daemon
+  cli -->|XPC, launchd Mach service| daemon
   cli -->|dockma shell| ssock --> daemon
-  launchd -->|runs dockma daemon| daemon
+  launchd -->|runs dockmad| daemon
   published --> daemon
   vsock["vsock<br/>1024 Docker API bytes<br/>1025 control JSON lines, the agent dials<br/>1026 TCP and UDP tunnels<br/>1027 shell frames"]
   daemon <--> vsock <--> agent
@@ -45,8 +44,8 @@ flowchart LR
 
 | Part | Code | What it is |
 |---|---|---|
-| dockma CLI | [`Dockma`](../Sources/DockmaCLI/Dockma.swift) | Every subcommand; it talks to the daemon only through `control.sock` and launchd. |
-| launchd job | [`LaunchAgent.plist`](../Sources/DockmaCore/Daemon/LaunchAgent.swift) | Runs `dockma daemon`; `KeepAlive.SuccessfulExit=false` restarts it only after a non-zero exit. |
+| dockma CLI | [`Dockma`](../Sources/DockmaCLI/Dockma.swift) | Every subcommand; it talks to the daemon only through its XPC service and launchd. |
+| launchd job | [`LaunchAgent.plist`](../Sources/DockmaCore/Daemon/LaunchAgent.swift) | Runs `dockmad` and declares its Mach service; `KeepAlive.SuccessfulExit=false` restarts it only after a non-zero exit. |
 | daemon | [`Daemon`](../Sources/DockmaCore/Daemon/Daemon.swift) | One process per state directory; owns the VM and every forward. |
 | vsock ports | [`VMConfigurationBuilder.Port`](../Sources/DockmaCore/VM/VMConfigurationBuilder.swift) | 1024–1027, duplicated as constants in [`main`](../vm/agent/main.go). Messages: CLAUDE.md, "Host–guest protocol". |
 | VM devices | [`VMConfigurationBuilder.build`](../Sources/DockmaCore/VM/VMConfigurationBuilder.swift) | CPUs, memory, disks, virtiofs shares, vsock, console ports, network. |
@@ -65,7 +64,7 @@ flowchart TB
     cclient["ControlClient"]
     session["ShellSession"]
   end
-  subgraph daemonproc["dockma daemon process (main RunLoop)"]
+  subgraph daemonproc["dockmad process (main RunLoop)"]
     daemon["Daemon"]
     cserver["ControlServer"]
     host["VMHost"]
@@ -98,8 +97,8 @@ flowchart TB
 | `start` | [`Start.run`](../Sources/DockmaCLI/Dockma.swift) | Installs a release guest if needed, loads the job, waits for Docker. |
 | `stop` | [`Stop.run`](../Sources/DockmaCLI/Dockma.swift) | `launchctl bootout`, then waits for the daemon to exit. |
 | daemon entry | [`DaemonCommand.run`](../Sources/DockmaCLI/Dockma.swift) | Creates the `Daemon` and runs the main RunLoop, not `dispatchMain()` (see CLAUDE.md). |
-| control client | [`ControlClient.waitUntilReady`](../Sources/DockmaCore/Daemon/ControlProtocol.swift) | One JSON request, one reply; `wait` is answered once Docker is ready. |
-| control server | [`ControlServer.listen`](../Sources/DockmaCore/Daemon/ControlProtocol.swift) | Accepts on `control.sock` and hands requests to [`Daemon.handle`](../Sources/DockmaCore/Daemon/Daemon.swift). |
+| control client | [`ControlClient.waitUntilReady`](../Sources/DockmaCore/Daemon/ControlProtocol.swift) | One JSON request, one reply, in XPC messages; `wait` is answered once Docker is ready. Checks the job's pid before a lookup, which would make launchd start an exited job. |
+| control server | [`ControlServer.listen`](../Sources/DockmaCore/Daemon/ControlProtocol.swift) | Checks in the Mach service, admits only peers signed as the CLI ([`CodeSigning`](../Sources/DockmaCore/VM/Entitlements.swift)), and hands requests to [`Daemon.handle`](../Sources/DockmaCore/Daemon/Daemon.swift). |
 | VM wrapper | [`VMHost.start`](../Sources/DockmaCore/VM/VMHost.swift) | Owns `VZVirtualMachine`; [`VMHost.listen`](../Sources/DockmaCore/VM/VMHost.swift) and [`VMHost.connect`](../Sources/DockmaCore/VM/VMHost.swift) for vsock. |
 | agent link | [`AgentClient.accept`](../Sources/DockmaCore/Agent/AgentClient.swift) | Takes the agent's connection on 1025 and dispatches its messages in [`AgentClient.handle`](../Sources/DockmaCore/Agent/AgentClient.swift). |
 | port forwarding | [`PortForwarder.update`](../Sources/DockmaCore/Forwarding/PortForwarder.swift) | Turns the agent's port set into listeners and relays. |
@@ -175,10 +174,10 @@ sequenceDiagram
   participant DK as dockerd
   CLI->>CLI: install release guest if needed, validate guest protocol
   CLI->>LD: write plist, bootstrap job
-  LD->>D: run dockma daemon
-  D->>D: take daemon.lock, listen on control.sock
-  CLI->>D: connect to control.sock (kqueue wakes on the socket or the daemon's exit)
-  CLI->>D: wait
+  CLI->>LD: wait, on the job's Mach service (launchd holds it until check-in)
+  LD->>D: run dockmad
+  D->>D: take daemon.lock, check in the Mach service
+  LD->>D: deliver wait
   D->>D: load config, prepare data disk, build VM config
   D->>VM: listen on vsock 1025, then start
   D->>D: VM running: serve docker.sock and shell.sock
@@ -195,13 +194,13 @@ sequenceDiagram
 |---|---|
 | guest checks | [`installReleaseGuest`](../Sources/DockmaCLI/Dockma.swift), [`GuestImage.validate`](../Sources/DockmaCore/VM/VMConfigurationBuilder.swift) |
 | job | [`Start.loadJob`](../Sources/DockmaCLI/Dockma.swift) → [`LaunchAgent.install`](../Sources/DockmaCore/Daemon/LaunchAgent.swift) |
-| waiting for the socket | [`Start.connectToDaemon`](../Sources/DockmaCLI/Dockma.swift), [`KernelEvents`](../Sources/DockmaCore/Support/KernelEvents.swift) |
+| waiting | [`ControlClient.waitUntilReady`](../Sources/DockmaCore/Daemon/ControlProtocol.swift) |
 | daemon start | [`Daemon.start`](../Sources/DockmaCore/Daemon/Daemon.swift) → [`Daemon.boot`](../Sources/DockmaCore/Daemon/Daemon.swift) → [`Daemon.vmStarted`](../Sources/DockmaCore/Daemon/Daemon.swift) |
 | agent connects | [`dialControl`](../vm/agent/control.go) → [`AgentClient.accept`](../Sources/DockmaCore/Agent/AgentClient.swift); `onConnect` in `Daemon.boot` sends `settime` |
 | Docker readiness | [`Waiter.Wait`](../vm/agent/internal/filewaiter/filewaiter.go), then [`portWatcher.watch`](../vm/agent/portwatcher.go) calls [`portWatcher.setDockerReady`](../vm/agent/portwatcher.go) once the stream opens → [`Daemon.answerReadyWaiters`](../Sources/DockmaCore/Daemon/Daemon.swift) |
 | final check | [`DockerPing.isResponding`](../Sources/DockmaCore/Daemon/ControlProtocol.swift) |
 
-A daemon that fails during startup exits 0, so launchd doesn't loop. `start` sees the control connection close or the process exit, and prints the daemon log.
+A daemon that fails during startup exits 0, so launchd doesn't loop. `start` sees the XPC connection close and prints the daemon log.
 
 ### 4b. A published port
 

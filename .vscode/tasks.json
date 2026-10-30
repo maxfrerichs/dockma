@@ -28,16 +28,17 @@
             "problemMatcher": []
         },
         {
-            "label": "debug VM: stop",
+            "label": "debug VM: start, daemon waits for debugger",
+            "detail": "launchd starts dockmad suspended until \"Attach to daemon (launchd)\" attaches",
             "type": "shell",
-            "command": ".build/debug/dockma stop",
+            "command": "DOCKMA_WAIT_FOR_DEBUGGER=1 .build/debug/dockma start --timeout 600",
+            "dependsOn": "make build",
             "problemMatcher": []
         },
         {
-            "label": "debug VM: prepare foreground daemon",
-            "detail": "Build, then stop the launchd job, which would hold daemon.lock",
-            "dependsOn": ["make build", "debug VM: stop"],
-            "dependsOrder": "sequence",
+            "label": "debug VM: stop",
+            "type": "shell",
+            "command": ".build/debug/dockma stop",
             "problemMatcher": []
         },
         {

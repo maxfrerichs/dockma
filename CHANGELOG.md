@@ -7,6 +7,11 @@ All notable changes to dockma are recorded here. The format follows [Keep a Chan
 ### Added
 - Changes made on the Mac to a bind mount under home now fire inotify events in containers, so file watchers like `vite`, `nodemon` and `webpack --watch` pick up edits. The guest's own writes aren't reported back to it twice. Needs the new guest (`dockma install` or `make guest install-guest`); an older guest keeps working without the events.
 
+### Changed
+- The daemon is its own binary, `dockmad`, installed next to `dockma` (install.sh, `make install` and the release tarball ship both). Only `dockmad` carries the virtualization entitlement. The launchd job runs the `dockmad` beside the `dockma` that ran `start`. **After upgrading, run `dockma restart` once**: a job from an older dockma keeps running, `dockma status` asks for the restart, and at its next launch (login or crash) it exits with the same hint.
+- The CLI talks to the daemon over XPC instead of `~/.dockma/control.sock`, which is gone. Each side checks the other's code-signing identifier. While releases are ad-hoc signed, any local process can claim that identifier, as any of your processes can already use `docker.sock`. `dockma start` no longer polls launchd or watches the state directory while the daemon comes up. During a stop, `dockma status` reports `stopping` (it said `stopped`), and `dockma start` waits for the stop to finish and then starts the VM, where it used to report that the daemon exited.
+- `dockma daemon` no longer runs the daemon in the foreground: launchd hands the XPC service only to its job. To debug the daemon from its first instruction, `DOCKMA_WAIT_FOR_DEBUGGER=1 dockma start` has launchd start it suspended until a debugger attaches.
+
 ### Fixed
 - A guest that stops reading its control connection no longer freezes the daemon: a write to the agent that blocks for 5 s drops the connection, and the agent reconnects. Before, `dockma status` and `stop`, new docker.sock connections and published ports could all hang behind it.
 - The daemon applies the agent's messages in the order they were sent, so two quick port changes can't leave a stale set of forwarded ports.

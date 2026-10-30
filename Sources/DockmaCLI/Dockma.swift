@@ -11,14 +11,6 @@ struct Dockma: ParsableCommand {
         subcommands: [Start.self, Install.self, Stop.self, Restart.self, Status.self, ShellCommand.self, Logs.self, ConfigCommand.self, Delete.self, DaemonCommand.self])
 }
 
-/// Absolute path of this binary, which launchd runs as the daemon. A
-/// symlink it was run through is kept: package managers point a stable link
-/// (`/opt/homebrew/bin/dockma`) at a versioned directory an upgrade deletes.
-func currentExecutable() -> String {
-    let url = Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
-    return url.standardizedFileURL.path
-}
-
 /// Moves this `DOCKMA_HOME` off a job an older dockma started under the
 /// default label, saying so when it stopped one.
 func migrateLegacyJob(of agent: LaunchAgent) throws {
@@ -55,13 +47,17 @@ struct Start: ParsableCommand {
 
     /// Starts the daemon and waits until Docker answers, showing the boot log on a terminal.
     func run() throws {
-        guard Entitlements.hasVirtualization() else {
+        let paths = Paths.default()
+        let agent = LaunchAgent(paths: paths)
+        guard FileManager.default.isExecutableFile(atPath: agent.executable) else {
+            throw DockmaError("\(agent.executable) is missing; install it next to dockma (`make install`).")
+        }
+        guard Entitlements.hasVirtualization(executable: agent.executable) else {
             throw DockmaError("""
-                \(currentExecutable()) lacks the \(Entitlements.virtualization) entitlement \
+                \(agent.executable) lacks the \(Entitlements.virtualization) entitlement \
                 (a plain `swift build` strips it). Build with `make build` or install with `make install`.
                 """)
         }
-        let paths = Paths.default()
         try paths.createDirectories()
         let config = try Config.load(from: paths.config)
         try config.validate()
@@ -69,12 +65,11 @@ struct Start: ParsableCommand {
         // A running VM keeps the guest it booted; `start` leaves it alone.
         if ProcessInfo.processInfo.environment["DOCKMA_NO_AUTO_INSTALL"] != "1",
            GuestImage.needsReleaseInstall(paths: paths, version: DockmaVersion.current),
-           !ControlClient.isDaemonAnswering(paths: paths) {
+           agent.state().pid == nil {
             try installReleaseGuest(paths: paths, style: style)
         }
         try GuestImage.validate(paths: paths)
 
-        let agent = LaunchAgent(paths: paths, executable: currentExecutable())
         guard let logs = try loadJob(agent: agent, paths: paths, config: config, style: style) else { return }
 
         let startedAt = ContinuousClock.now
@@ -84,8 +79,7 @@ struct Start: ParsableCommand {
         defer { progress?.finish() }
         let errorStyle = TerminalStyle.standardError()
         do {
-            let fd = try connectToDaemon(agent: agent, paths: paths, deadline: deadline)
-            switch try ControlClient.waitUntilReady(fd: fd, timeout: deadline - .now) {
+            switch try ControlClient.waitUntilReady(paths: paths, timeout: deadline - .now) {
             case .ready:
                 // The daemon serves the docker socket before Docker can be
                 // ready; this checks the whole path once.
@@ -93,14 +87,23 @@ struct Start: ParsableCommand {
                     throw DockmaError("the daemon reported Docker ready, but \(paths.dockerSocket.path) doesn't answer")
                 }
             case .closed:
-                if ControlClient.isDaemonAnswering(paths: paths) {
-                    throw DockmaError("the running dockma daemon predates this CLI; run `dockma restart`")
+                // A refused signature also closes the connection.
+                if agent.state().pid != nil {
+                    throw DockmaError("""
+                        the running dockma daemon doesn't answer this CLI: it predates it, \
+                        or one of their signatures doesn't match; run `dockma restart`
+                        """)
                 }
+                throw StartFailure.daemonExited
+            case .exited:
                 throw StartFailure.daemonExited
             case .timedOut:
                 throw StartFailure.timedOut
             }
         } catch StartFailure.daemonExited {
+            // launchd would start the job again for the request still queued
+            // on its service; unloading drops both.
+            try? agent.bootout()
             progress?.finish()
             Terminal.printError(errorStyle.failure("The dockma daemon exited during startup. Its log:"))
             if let log = LogTail.lastLines(of: paths.daemonLog, count: 15) { Terminal.printError(log) }
@@ -144,10 +147,6 @@ struct Start: ParsableCommand {
             // A daemon that is already booting has rotated its logs.
             return lifecycleLogs(paths: paths, fromStart: true)
         }
-        if ControlClient.isDaemonAnswering(paths: paths) {
-            print(style.success("dockma is already running") + " (started outside launchd with `dockma daemon`)")
-            return nil
-        }
         // Until the new daemon rotates them, the logs are the previous run's;
         // snapshot them before it can.
         let logs = lifecycleLogs(paths: paths, fromStart: true, ignoringPrevious: true)
@@ -159,37 +158,6 @@ struct Start: ParsableCommand {
     private enum StartFailure: Error {
         case daemonExited
         case timedOut
-    }
-
-    /// Connects to the daemon's control socket as soon as it listens. Wakes
-    /// on changes to the state directory, where the socket appears, and on
-    /// the daemon's exit. Until the daemon's pid is known, every wake also
-    /// asks launchd, which tells a daemon that already exited from one not
-    /// yet started.
-    private func connectToDaemon(agent: LaunchAgent, paths: Paths, deadline: ContinuousClock.Instant) throws -> Int32 {
-        let events = try KernelEvents()
-        try events.watchWrites(toDirectory: paths.root)
-        var isWatchingExit = false
-        func checkJob() throws {
-            let job = agent.state()
-            if job.hasExited { throw StartFailure.daemonExited }
-            guard let pid = job.pid else { return }
-            guard events.watchExit(ofProcess: pid) else { throw StartFailure.daemonExited }
-            isWatchingExit = true
-        }
-        try checkJob()
-        while true {
-            if let fd = try? UnixSocket.connect(path: paths.controlSocket.path, timeoutSeconds: 5) {
-                return fd
-            }
-            let remaining = deadline - .now
-            guard remaining > .zero else { throw StartFailure.timedOut }
-            // The timeout only bounds a wait for a daemon whose pid wasn't
-            // known yet; with the exit watched, events alone suffice.
-            let event = events.wait(timeout: isWatchingExit ? remaining : min(remaining, .seconds(1)))
-            if event == .processExited { throw StartFailure.daemonExited }
-            if !isWatchingExit { try checkJob() }
-        }
     }
 }
 
@@ -227,7 +195,7 @@ struct Install: ParsableCommand {
         let paths = Paths.default()
         let style = TerminalStyle.standardOutput()
         try installReleaseGuest(paths: paths, style: style)
-        if ControlClient.isDaemonAnswering(paths: paths) {
+        if LaunchAgent(paths: paths).state().pid != nil {
             print("  The running VM keeps its current guest until `dockma restart`.")
         } else {
             print("  Start it with `dockma start`.")
@@ -242,7 +210,7 @@ struct Stop: ParsableCommand {
     func run() throws {
         let paths = Paths.default()
         let style = TerminalStyle.standardOutput()
-        let agent = LaunchAgent(paths: paths, executable: currentExecutable())
+        let agent = LaunchAgent(paths: paths)
         if try agent.migrateLegacyJob() {
             print(style.success("dockma stopped") + " (a job an older dockma started as \(LaunchAgent.defaultLabel))")
             return
@@ -255,9 +223,6 @@ struct Stop: ParsableCommand {
             try agent.bootout()
             progress?.finish()
             print(style.success("dockma stopped") + " " + style.dim("(\(TerminalText.seconds(.now - startedAt)))"))
-        } else if (try? ControlClient.stop(paths: paths)) != nil {
-            // A daemon started by hand (`dockma daemon`), not by launchd.
-            print(style.success("Stop requested") + " (daemon started with `dockma daemon`)")
         } else {
             print("dockma is not running")
         }
@@ -288,16 +253,19 @@ struct Status: ParsableCommand {
     func run() throws {
         let paths = Paths.default()
         let style = TerminalStyle.standardOutput()
-        guard let status = try? ControlClient.status(paths: paths) else {
-            if ControlClient.isDaemonAnswering(paths: paths) {
-                if json {
-                    print(#"{"state":"unknown"}"#)
-                } else {
-                    print("dockma is running, but its daemon is another version whose status this CLI can't read")
-                    print(style.dim("Run `dockma restart` to switch to this CLI's version."))
-                }
-                return
+        let answer: DaemonStatus?
+        do {
+            answer = try ControlClient.status(paths: paths)
+        } catch {
+            if json {
+                print(#"{"state":"unknown"}"#)
+            } else {
+                print("dockma is running, but its daemon doesn't answer this CLI: it is another version, or their signatures don't match")
+                print(style.dim("Run `dockma restart` to switch to this CLI's version."))
             }
+            return
+        }
+        guard let status = answer else {
             if json {
                 print(#"{"state":"stopped"}"#)
             } else {
@@ -487,12 +455,12 @@ struct ConfigCommand: ParsableCommand {
             if config.autostart != before.autostart {
                 // Move the plist between ~/.dockma and ~/Library/LaunchAgents
                 // without touching a running job.
-                let agent = LaunchAgent(paths: paths, executable: currentExecutable())
+                let agent = LaunchAgent(paths: paths)
                 if FileManager.default.fileExists(atPath: agent.plistURL(autostart: before.autostart).path) {
                     try agent.writePlist(autostart: config.autostart)
                 }
             }
-            let isRunning = ControlClient.isDaemonAnswering(paths: paths)
+            let isRunning = LaunchAgent(paths: paths).state().pid != nil
             print(style.success("Saved.") + (isRunning ? " Run `dockma restart` to apply." : " Applies on the next `dockma start`."))
         }
         /// `value`, in bold when the setting just changed.
@@ -519,9 +487,9 @@ struct Delete: ParsableCommand {
     /// Deletes the data disk, config and logs after confirmation.
     func run() throws {
         let paths = Paths.default()
-        let agent = LaunchAgent(paths: paths, executable: currentExecutable())
+        let agent = LaunchAgent(paths: paths)
         try migrateLegacyJob(of: agent)
-        if agent.state().isLoaded || ControlClient.isDaemonAnswering(paths: paths) {
+        if agent.state().isLoaded {
             throw DockmaError("dockma is running; run `dockma stop` first")
         }
         if !force {
@@ -545,19 +513,12 @@ struct Delete: ParsableCommand {
 struct DaemonCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "daemon",
-        abstract: "Run the VM in the foreground (launchd runs this).",
+        abstract: "Replaced by dockmad; run `dockma restart`.",
         shouldDisplay: false)
 
+    /// Explains why a job from before `dockmad` stopped. Exits 0, so
+    /// launchd doesn't restart the old job in a loop.
     func run() throws {
-        let daemon = MainActor.assumeIsolated {
-            let daemon = Daemon(paths: Paths.default())
-            daemon.start()
-            return daemon
-        }
-        // Run the main thread's run loop rather than dispatchMain(): with
-        // dispatchMain() main-queue work runs on a worker thread, which breaks
-        // @MainActor isolation checks. The port keeps the run loop alive.
-        RunLoop.main.add(Port(), forMode: .default)
-        withExtendedLifetime(daemon) { RunLoop.main.run() }
+        print("This launchd job predates dockmad; run `dockma restart` to replace it.")
     }
 }
