@@ -26,11 +26,12 @@ public final class SystemPower {
     private var notifier: io_object_t = 0
 
     /// Registers for power messages, or returns nil when IOKit refuses. The
-    /// observer stays registered for the life of the process.
+    /// observer stays registered until it is released, which must happen on
+    /// the main actor: a deinit queued from elsewhere could race a callback.
     public init?(onWake: @escaping () -> Void) {
         self.onWake = onWake
-        // Retained on purpose: IOKit keeps the pointer until the process exits.
-        rootPort = IORegisterForSystemPower(Unmanaged.passRetained(self).toOpaque(), &notificationPort, { refcon, _, message, argument in
+        // Unretained: deinit deregisters before IOKit could use a dangling pointer.
+        rootPort = IORegisterForSystemPower(Unmanaged.passUnretained(self).toOpaque(), &notificationPort, { refcon, _, message, argument in
             guard let refcon else { return }
             let power = Unmanaged<SystemPower>.fromOpaque(refcon).takeUnretainedValue()
             // The source is on the main run loop.
@@ -38,6 +39,16 @@ public final class SystemPower {
         }, &notifier)
         guard rootPort != 0, let notificationPort else { return nil }
         CFRunLoopAddSource(CFRunLoopGetMain(), IONotificationPortGetRunLoopSource(notificationPort).takeUnretainedValue(), .defaultMode)
+    }
+
+    // Also runs after a failed init, so it checks what was registered.
+    isolated deinit {
+        if let notificationPort {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), IONotificationPortGetRunLoopSource(notificationPort).takeUnretainedValue(), .defaultMode)
+        }
+        if notifier != 0 { IODeregisterForSystemPower(&notifier) }
+        if rootPort != 0 { IOServiceClose(rootPort) }
+        if let notificationPort { IONotificationPortDestroy(notificationPort) }
     }
 
     /// The action for one power message.

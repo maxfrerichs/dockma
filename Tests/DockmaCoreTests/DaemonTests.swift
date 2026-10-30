@@ -90,3 +90,12 @@ import Testing
     // kIOMessageSystemWillPowerOn is sent before the wake completes.
     #expect(SystemPower.action(for: 0xE000_0320) == .ignore)
 }
+
+@MainActor @Test func powerObserverRegistersAndDeregisters() throws {
+    var power = SystemPower {}
+    try #require(power != nil)
+    weak let released = power
+    // On the main actor, the isolated deinit runs as the last reference goes.
+    power = nil
+    #expect(released == nil)
+}
