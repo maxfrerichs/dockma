@@ -39,12 +39,6 @@ import Testing
     #expect(object["op"] as? String == "D")
 }
 
-/// `wait` is a wire string; an older daemon fails to decode it.
-@Test func encodesWaitRequest() throws {
-    let line = try jsonLine(ControlRequest(command: .wait))
-    #expect(String(decoding: line, as: UTF8.self) == #"{"command":"wait"}"# + "\n")
-}
-
 @Test func encodesHostMessagesAsSingleLines() throws {
     let line = try jsonLine(AgentMessage.setTime(Date(timeIntervalSince1970: 1.5)))
     #expect(line.last == UInt8(ascii: "\n"))

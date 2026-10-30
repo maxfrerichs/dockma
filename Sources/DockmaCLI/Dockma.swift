@@ -79,7 +79,7 @@ struct Start: ParsableCommand {
         defer { progress?.finish() }
         let errorStyle = TerminalStyle.standardError()
         do {
-            switch try ControlClient.waitUntilReady(paths: paths, timeout: deadline - .now) {
+            switch ControlClient.waitUntilReady(paths: paths, timeout: deadline - .now) {
             case .ready:
                 // The daemon serves the docker socket before Docker can be
                 // ready; this checks the whole path once.
@@ -95,6 +95,8 @@ struct Start: ParsableCommand {
                         """)
                 }
                 throw StartFailure.daemonExited
+            case .stopping:
+                throw DockmaError("dockma was stopped while it was starting")
             case .exited:
                 throw StartFailure.daemonExited
             case .timedOut:
