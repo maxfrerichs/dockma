@@ -4,8 +4,10 @@ All notable changes to dockma are recorded here. The format follows [Keep a Chan
 
 ## Unreleased
 
+## 0.7.0 – 2026-10-30
+
 ### Added
-- Changes made on the Mac to a bind mount under home now fire inotify events in containers, so file watchers like `vite`, `nodemon` and `webpack --watch` pick up edits. The guest's own writes aren't reported back to it twice. Needs the new guest (`dockma install` or `make guest install-guest`); an older guest keeps working without the events.
+- Changes made on the Mac to a bind mount under home now fire inotify events in containers, so file watchers like `vite`, `nodemon` and `webpack --watch` pick up edits. The guest's own writes aren't reported back to it twice. Needs the new guest (`dockma install` or `make guest install-guest`); an older guest keeps working without the events. The agent is 0.7.2.
 
 ### Changed
 - The daemon is its own binary, `dockmad`, installed next to `dockma` (install.sh, `make install` and the release tarball ship both). Only `dockmad` carries the virtualization entitlement. The launchd job runs the `dockmad` beside the `dockma` that ran `start`. **After upgrading, run `dockma restart` once**: a job from an older dockma keeps running, `dockma status` asks for the restart, and at its next launch (login or crash) it exits with the same hint.
