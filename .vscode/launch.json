@@ -1,19 +1,9 @@
 {
     // Debugging against the debug VM in ~/.dockma-debug; docs/debugging.md.
-    // The binary must be signed (make build): a plain swift build strips the
-    // virtualization entitlement, and the daemon then can't boot a VM.
+    // The binaries must be signed (make build): a plain swift build strips the
+    // virtualization entitlement from dockmad and the identifiers both check.
     "version": "0.2.0",
     "configurations": [
-        {
-            "name": "Daemon (debug VM)",
-            "type": "swift",
-            "request": "launch",
-            "program": "${workspaceFolder}/.build/debug/dockma",
-            "args": ["daemon"],
-            "env": { "DOCKMA_HOME": "${userHome}/.dockma-debug" },
-            "cwd": "${workspaceFolder}",
-            "preLaunchTask": "debug VM: prepare foreground daemon"
-        },
         {
             "name": "CLI (debug VM)",
             "type": "swift",
@@ -28,7 +18,7 @@
             "name": "Attach to daemon (launchd)",
             "type": "swift",
             "request": "attach",
-            "program": "${workspaceFolder}/.build/debug/dockma",
+            "program": "${workspaceFolder}/.build/debug/dockmad",
             "waitFor": true
         },
         {

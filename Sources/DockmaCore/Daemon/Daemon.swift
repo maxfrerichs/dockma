@@ -1,9 +1,9 @@
 import Foundation
 
 /// The long-lived process behind the launchd job: boots the VM and serves the
-/// docker socket, port forwards and control socket until asked to stop.
+/// docker socket, port forwards and control service until asked to stop.
 @MainActor
-public final class Daemon {
+public final class Daemon: ControlHandler {
     /// How long the guest gets to power off before the VM is stopped hard.
     /// The deadlines must stay ordered: dockerd's own shutdown (15 s with
     /// default container stop timeouts) < the guest shutdown script's wait
@@ -25,9 +25,14 @@ public final class Daemon {
     private var agent: AgentClient?
     private var ports: PortForwarder?
     private var files: FileWatcher?
+    /// Syncs the guest clock when the Mac wakes.
+    private var systemPower: SystemPower?
     private var listeners: [SocketListener] = []
-    /// `wait` requests to answer once Docker is ready.
-    private var readyWaiters: [ControlReply] = []
+    /// Open until the process exits, so `status` answers `stopping` during a
+    /// stop instead of leaving the client waiting.
+    private var controlServer: ControlServer?
+    /// Replies to `wait` calls, to send once Docker is ready.
+    private var readyWaiters: [@Sendable (DaemonStatus?) -> Void] = []
     private var signalSources: [DispatchSourceSignal] = []
     private var state: DaemonStatus.State = .starting
     private var isStopRequested = false
@@ -91,15 +96,11 @@ public final class Daemon {
 
     private func boot() throws {
         try Paths.validateSocketPath(paths.dockerSocket)
-        try Paths.validateSocketPath(paths.controlSocket)
         try Paths.validateSocketPath(paths.shellSocket)
 
-        // Listen first: a `dockma start` waiting on this socket then sees
+        // Listen first: a `dockma start` waiting on the service then sees
         // every later startup failure as the connection closing.
-        listeners.append(try ControlServer.listen(path: paths.controlSocket.path) { [weak self] request, reply in
-            guard let self else { return reply.close() }
-            self.handle(request, reply: reply)
-        })
+        controlServer = ControlServer.listen(machService: LaunchAgent.label(for: paths), handler: self)
 
         config = try Config.load(from: paths.config)
         try config.validate()
@@ -195,8 +196,15 @@ public final class Daemon {
             return
         }
 
-        // Clocks drift apart while the Mac sleeps; the agent steps the guest
-        // clock only when it is off by more than half a second.
+        // The guest clock stands still while the Mac sleeps, so it is synced
+        // on every wake; the timer catches changes to the host clock. The
+        // agent steps the guest clock only when it is off by more than half a second.
+        systemPower = SystemPower { [weak self] in
+            guard let self, !self.isStopRequested else { return }
+            Log.info("Mac woke, syncing the guest clock")
+            self.agent?.send(.setTime(Date()))
+        }
+        if systemPower == nil { Log.info("cannot register for wake notifications; the guest clock may lag up to \(Self.timeSyncInterval) after sleep") }
         Task { [weak self] in
             while true {
                 try? await Task.sleep(for: Self.timeSyncInterval)
@@ -224,33 +232,9 @@ public final class Daemon {
         }
     }
 
-    /// Answers a control request, at once or (for `wait`) once Docker is ready.
-    private func handle(_ request: ControlRequest, reply: ControlReply) {
-        switch request.command {
-        case .status:
-            sendStatus(to: reply)
-        case .stop:
-            // requestStop() can exit at once (VM not running yet), so defer it:
-            // the reply is written in this same main-actor job, before the
-            // queued block can run.
-            DispatchQueue.main.async { [weak self] in
-                MainActor.assumeIsolated { self?.requestStop() }
-            }
-            reply.send(Data("{}".utf8))
-        case .wait:
-            if isStopRequested {
-                reply.close()
-            } else if agent?.isDockerReady == true {
-                sendStatus(to: reply)
-            } else {
-                readyWaiters.append(reply)
-            }
-        }
-    }
-
-    /// Replies with the current `DaemonStatus`.
-    private func sendStatus(to reply: ControlReply) {
-        let status = DaemonStatus(
+    /// The status a `status` or `wait` call replies with.
+    public func status() -> DaemonStatus {
+        DaemonStatus(
             state: state,
             pid: getpid(),
             startedAt: startedAt,
@@ -263,21 +247,37 @@ public final class Daemon {
             forwardedUDPPorts: ports?.ports.filter { $0.transport == .udp }.map(\.port) ?? [],
             warnings: warnings + (ports?.failureWarnings ?? []),
             version: DockmaVersion.current)
-        guard let data = try? JSONEncoder().encode(status) else { return reply.close() }
-        reply.send(data)
     }
 
-    /// Replies to every pending `wait` request with the current status.
+    /// Stops the daemon for a `stop` call.
+    public func stop() {
+        requestStop()
+    }
+
+    /// Replies once Docker is ready, at once if it is, and with nil when a
+    /// stop comes first.
+    public func waitUntilReady(reply: @escaping @Sendable (DaemonStatus?) -> Void) {
+        if isStopRequested {
+            reply(nil)
+        } else if agent?.isDockerReady == true {
+            reply(status())
+        } else {
+            readyWaiters.append(reply)
+        }
+    }
+
+    /// Replies to every pending `wait` call with the current status.
     private func answerReadyWaiters() {
         guard !isStopRequested else { return }
         let waiters = readyWaiters
         readyWaiters.removeAll()
-        waiters.forEach(sendStatus(to:))
+        let status = status()
+        waiters.forEach { $0(status) }
     }
 
-    /// Closes pending `wait` requests without a reply.
-    private func closeReadyWaiters() {
-        readyWaiters.forEach { $0.close() }
+    /// Tells pending `wait` calls that the daemon is stopping.
+    private func releaseReadyWaiters() {
+        readyWaiters.forEach { $0(nil) }
         readyWaiters.removeAll()
     }
 
@@ -289,8 +289,9 @@ public final class Daemon {
         let now = ContinuousClock.now
         stopRequestedAt = now
         state = .stopping
-        // New connections are refused from here on; the agent connection
-        // stays open to deliver the shutdown request.
+        // New connections are refused from here on, except control requests
+        // (pending and new `wait` calls get nil); the agent connection stays open to deliver the
+        // shutdown request.
         closeListeners()
 
         guard let host, host.isRunning else {
@@ -355,13 +356,14 @@ public final class Daemon {
         stopRequested ? 0 : 1
     }
 
-    /// Closes forwarded ports, file watching, every listener and pending `wait` requests.
+    /// Closes forwarded ports, file watching and every socket listener, and
+    /// answers pending `wait` calls with nil.
     private func closeListeners() {
         ports?.removeAll()
         files?.stop()
         listeners.forEach { $0.cancel() }
         listeners.removeAll()
-        closeReadyWaiters()
+        releaseReadyWaiters()
     }
 
     /// Closes everything, the agent connection included.
@@ -419,7 +421,7 @@ public final class Daemon {
     }
 
     /// Takes an exclusive lock that is held for the life of the process, so a
-    /// second daemon (say `dockma daemon` by hand next to the launchd job)
+    /// second daemon (say the job of an older dockma next to this one)
     /// can't boot another VM on the same data disk. Returns the descriptor.
     nonisolated static func acquireLock(at url: URL) throws -> Int32 {
         try FileLock.acquire(at: url, busyMessage: "another dockma daemon is running")

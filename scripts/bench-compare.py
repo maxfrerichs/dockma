@@ -118,7 +118,7 @@ class Engine:
 
 class Dockma(Engine):
     name = "dockma"
-    process_patterns = ["dockma daemon"]
+    process_patterns = ["dockmad"]
 
     def __init__(self, home=HOME / ".dockma-bench", binary=DOCKMA):
         self.home = home

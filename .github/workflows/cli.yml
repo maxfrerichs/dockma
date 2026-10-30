@@ -1,4 +1,4 @@
-# Tests the Swift CLI and builds the signed release binary as a tarball
+# Tests the Swift CLI and builds the signed release binaries as a tarball
 # artifact. release.yml calls this with a version and the tag to build.
 name: cli
 
@@ -80,9 +80,20 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           bin="$(swift build -c release --show-bin-path)/dockma"
+          daemon="$(swift build -c release --show-bin-path)/dockmad"
           lipo -archs "$bin"
-          codesign --display --entitlements - --xml "$bin" | grep -q com.apple.security.virtualization \
-            || { echo "::error::binary lacks the virtualization entitlement"; exit 1; }
+          lipo -archs "$daemon"
+          # Only the daemon runs the VM, so only it gets the entitlement. grep
+          # reads all input: `grep -q` exits early, and SIGPIPE fails the pipe.
+          codesign --display --entitlements - --xml "$daemon" | grep com.apple.security.virtualization >/dev/null \
+            || { echo "::error::dockmad lacks the virtualization entitlement"; exit 1; }
+          ! codesign --display --entitlements - --xml "$bin" 2>/dev/null | grep com.apple.security.virtualization >/dev/null \
+            || { echo "::error::dockma carries the virtualization entitlement"; exit 1; }
+          # Each side requires the other's signing identifier.
+          codesign --display --verbose "$bin" 2>&1 | grep -x 'Identifier=io.dockma.cli' >/dev/null \
+            || { echo "::error::dockma is not signed as io.dockma.cli"; exit 1; }
+          codesign --display --verbose "$daemon" 2>&1 | grep -x 'Identifier=io.dockma.daemon' >/dev/null \
+            || { echo "::error::dockmad is not signed as io.dockma.daemon"; exit 1; }
           "$bin" --help >/dev/null
           # A release binary must report its tag (DockmaVersion.current).
           actual="$("$bin" --version)"
@@ -98,9 +109,10 @@ jobs:
           version="${VERSION:-${GITHUB_SHA::12}}"
           name="dockma-${version}-macos-arm64.tar.gz"
           mkdir -p dist
-          cp "$(swift build -c release --show-bin-path)/dockma" LICENSE dist/
+          bin_dir="$(swift build -c release --show-bin-path)"
+          cp "$bin_dir/dockma" "$bin_dir/dockmad" LICENSE dist/
           # A tarball keeps the executable bit, which artifact uploads drop.
-          tar -czf "$name" -C dist dockma LICENSE
+          tar -czf "$name" -C dist dockma dockmad LICENSE
           echo "name=$name" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

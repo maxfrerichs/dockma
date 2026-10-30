@@ -35,7 +35,7 @@ public final class ShellSession: @unchecked Sendable {
         do {
             fd = try UnixSocket.connect(path: paths.shellSocket.path, timeoutSeconds: nil)
         } catch {
-            if ControlClient.isDaemonAnswering(paths: paths) {
+            if LaunchAgent(paths: paths).state().pid != nil {
                 throw DockmaError("the running dockma daemon predates `dockma shell`; run `dockma restart`")
             }
             throw DockmaError("dockma is not running (start it with `dockma start`)")

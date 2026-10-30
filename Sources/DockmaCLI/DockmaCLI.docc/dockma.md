@@ -292,7 +292,7 @@ dockma delete [--force] [--version] [--help]
 
 ## dockma.daemon
 
-Run the VM in the foreground (launchd runs this).
+Replaced by dockmad; run `dockma restart`.
 
 ```
 dockma daemon [--version] [--help]

@@ -1,15 +1,18 @@
 import Foundation
 
-/// CLI → daemon request on ~/.dockma/control.sock (one JSON line each way).
-public struct ControlRequest: Codable, Sendable {
-    /// `wait` is answered with a `DaemonStatus` once Docker is ready, and
-    /// closed without a reply if the daemon stops first.
-    public enum Command: String, Codable, Sendable { case status, stop, wait }
-    public var command: Command
-    public init(command: Command) { self.command = command }
+/// The calls the CLI makes on the daemon over its launchd Mach service. The
+/// protocol's and the selectors' names are wire names.
+@objc(DockmaDaemonControl) public protocol DaemonControl {
+    /// Replies with the daemon's status.
+    func status(reply: @escaping @Sendable (DaemonStatusMessage) -> Void)
+    /// Replies, then shuts the VM down.
+    func stop(reply: @escaping @Sendable () -> Void)
+    /// Replies with the status once Docker is ready, or with nil when the
+    /// daemon stops first.
+    func waitUntilReady(reply: @escaping @Sendable (DaemonStatusMessage?) -> Void)
 }
 
-/// Daemon → CLI status reply.
+/// Daemon → CLI status, printed by `dockma status --json`.
 public struct DaemonStatus: Codable, Equatable, Sendable {
     public enum State: String, Codable, Sendable {
         case starting, running, stopping
@@ -45,118 +48,298 @@ public struct DaemonStatus: Codable, Equatable, Sendable {
     }
 }
 
-/// Talks to a running daemon. Every call fails fast when none is listening.
+/// A `DaemonStatus` as it crosses XPC. The class name and the coder keys are
+/// wire names.
+@objc(DockmaDaemonStatus)
+public final class DaemonStatusMessage: NSObject, NSSecureCoding {
+    public static let supportsSecureCoding = true
+    /// The carried status.
+    public let status: DaemonStatus
+
+    /// A message carrying `status`.
+    public init(_ status: DaemonStatus) {
+        self.status = status
+    }
+
+    /// Encodes each field under its own key.
+    public func encode(with coder: NSCoder) {
+        coder.encode(status.state.rawValue as NSString, forKey: "state")
+        coder.encode(status.pid, forKey: "pid")
+        coder.encode(status.startedAt as NSDate, forKey: "startedAt")
+        coder.encode(status.cpus, forKey: "cpus")
+        coder.encode(Int64(bitPattern: status.memoryMiB), forKey: "memoryMiB")
+        coder.encode(status.agentConnected, forKey: "agentConnected")
+        coder.encode(status.agentVersion as NSString?, forKey: "agentVersion")
+        coder.encode(status.guestKernel as NSString?, forKey: "guestKernel")
+        coder.encode(status.forwardedPorts.map(NSNumber.init(value:)) as NSArray, forKey: "forwardedPorts")
+        coder.encode(status.forwardedUDPPorts?.map(NSNumber.init(value:)) as NSArray?, forKey: "forwardedUDPPorts")
+        coder.encode(status.warnings as NSArray, forKey: "warnings")
+        coder.encode(status.version as NSString?, forKey: "version")
+    }
+
+    /// Decodes a status; nil when a required field is missing. A state this
+    /// version doesn't know becomes `unknown`.
+    public init?(coder: NSCoder) {
+        guard let state = coder.decodeObject(of: NSString.self, forKey: "state") as String?,
+              let startedAt = coder.decodeObject(of: NSDate.self, forKey: "startedAt") as Date?,
+              let tcpPorts = coder.decodeArrayOfObjects(ofClass: NSNumber.self, forKey: "forwardedPorts"),
+              let warnings = coder.decodeArrayOfObjects(ofClass: NSString.self, forKey: "warnings"),
+              ["pid", "cpus", "memoryMiB", "agentConnected"].allSatisfy(coder.containsValue(forKey:))
+        else { return nil }
+        status = DaemonStatus(
+            state: DaemonStatus.State(rawValue: state) ?? .unknown,
+            pid: coder.decodeInt32(forKey: "pid"),
+            startedAt: startedAt,
+            cpus: coder.decodeInteger(forKey: "cpus"),
+            memoryMiB: UInt64(bitPattern: coder.decodeInt64(forKey: "memoryMiB")),
+            agentConnected: coder.decodeBool(forKey: "agentConnected"),
+            agentVersion: coder.decodeObject(of: NSString.self, forKey: "agentVersion") as String?,
+            guestKernel: coder.decodeObject(of: NSString.self, forKey: "guestKernel") as String?,
+            forwardedPorts: tcpPorts.map(\.uint16Value),
+            forwardedUDPPorts: coder.decodeArrayOfObjects(ofClass: NSNumber.self, forKey: "forwardedUDPPorts")?.map(\.uint16Value),
+            warnings: warnings.map { $0 as String },
+            version: coder.decodeObject(of: NSString.self, forKey: "version") as String?)
+    }
+}
+
+/// Talks to the daemon over its launchd Mach service, which is named after
+/// the job label (`LaunchAgent.label(for:)`).
 public enum ControlClient {
-    /// Whether a daemon answers a status request, even with a reply this
-    /// version can't decode. A socket round trip with a 5 s timeout.
-    public static func isDaemonAnswering(paths: Paths) -> Bool {
-        (try? roundTrip(paths: paths, request: ControlRequest(command: .status))) != nil
-    }
-
-    public static func status(paths: Paths) throws -> DaemonStatus {
-        let data = try roundTrip(paths: paths, request: ControlRequest(command: .status))
-        let decoder = JSONDecoder()
-        return try decoder.decode(DaemonStatus.self, from: data)
-    }
-
-    public static func stop(paths: Paths) throws {
-        _ = try roundTrip(paths: paths, request: ControlRequest(command: .stop))
+    /// The daemon's status, or nil when its job has no process. Throws when
+    /// a running daemon doesn't answer or its reply doesn't decode: it is
+    /// another version, or one of the two signatures doesn't match.
+    public static func status(paths: Paths) throws -> DaemonStatus? {
+        // A lookup of a loaded job whose process exited makes launchd start
+        // it again, booting the VM; check first. A daemon that exits between
+        // the check and the lookup can still be restarted this way.
+        guard LaunchAgent(paths: paths).state().pid != nil else { return nil }
+        let exchange = exchange(over: makeConnection(paths: paths), timeout: .seconds(5)) { control, reply in
+            control.status { reply($0.status) }
+        }
+        switch exchange {
+        case .reply(let status): return status
+        case .closed, .exited: throw DockmaError("the dockma daemon closed the control connection")
+        case .timedOut: throw DockmaError("the dockma daemon did not answer")
+        }
     }
 
     /// How a `wait` request ended.
     public enum WaitOutcome: Sendable {
         /// Docker is ready.
         case ready(DaemonStatus)
-        /// The daemon closed the connection without replying: it exited or
-        /// is stopping, or it is too old to know `wait`.
+        /// The daemon is stopping.
+        case stopping
+        /// The daemon's process exited, or launchd reports the job gone.
+        case exited
+        /// The connection ended without a reply: the daemon exited, it is
+        /// too old to serve this protocol, a signature check failed, or the
+        /// reply didn't decode.
         case closed
         /// Nothing arrived within the timeout.
         case timedOut
     }
 
-    /// Asks the daemon on an already connected `fd` to reply once Docker is
-    /// ready, and blocks until it does, closes, or `timeout` passes. Takes
-    /// ownership of `fd`.
-    public static func waitUntilReady(fd: Int32, timeout: Duration) throws -> WaitOutcome {
-        defer { close(fd) }
-        guard writeAll(try jsonLine(ControlRequest(command: .wait)), to: fd) else {
-            // The daemon went away between connect and write.
-            return .closed
-        }
-        var pending = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-        var ready: Int32
-        repeat {
-            ready = poll(&pending, 1, Int32(clamping: max(0, Int(timeout / .milliseconds(1)))))
-        } while ready < 0 && errno == EINTR
-        guard ready > 0 else { return .timedOut }
-        // Readable means a reply or EOF, and the reply is a single short line.
-        guard let line = LineReader(fd: fd).readLine() else { return .closed }
-        return .ready(try JSONDecoder().decode(DaemonStatus.self, from: line))
+    /// Asks the daemon to reply once Docker is ready, and blocks until it
+    /// does, the connection ends, its process exits, or `timeout` passes.
+    /// launchd queues the request until the daemon checks in, and starts a
+    /// loaded job that isn't running.
+    public static func waitUntilReady(paths: Paths, timeout: Duration) -> WaitOutcome {
+        let outcome = ExchangeOutcome<DaemonStatus?>()
+        // A daemon that fails before it takes the request leaves it queued,
+        // and no error reaches this side; the exit is the only sign.
+        let watch = DaemonExitWatch(agent: LaunchAgent(paths: paths)) { outcome.set(.exited) }
+        defer { watch.stop() }
+        return waitUntilReady(over: makeConnection(paths: paths), timeout: timeout, outcome: outcome)
     }
 
-    static func roundTrip(paths: Paths, request: ControlRequest) throws -> Data {
-        let fd = try UnixSocket.connect(path: paths.controlSocket.path, timeoutSeconds: 5)
-        defer { close(fd) }
-        guard writeAll(try jsonLine(request), to: fd) else { throw DockmaError.posix("write control socket") }
-        guard let line = LineReader(fd: fd).readLine() else {
-            throw DockmaError("daemon closed the control connection")
+    /// `waitUntilReady(paths:timeout:)` on the given unresumed `connection`.
+    static func waitUntilReady(over connection: NSXPCConnection, timeout: Duration,
+                               outcome: ExchangeOutcome<DaemonStatus?> = ExchangeOutcome()) -> WaitOutcome {
+        let exchange = exchange(over: connection, timeout: timeout, outcome: outcome) { control, reply in
+            control.waitUntilReady { reply($0?.status) }
         }
-        return line
+        switch exchange {
+        case .reply(let status?): return .ready(status)
+        case .reply(nil): return .stopping
+        case .closed: return .closed
+        case .exited: return .exited
+        case .timedOut: return .timedOut
+        }
+    }
+
+    /// A connection to the daemon of `paths` that accepts only a peer signed
+    /// as the daemon.
+    static func makeConnection(paths: Paths) -> NSXPCConnection {
+        let connection = NSXPCConnection(machServiceName: LaunchAgent.label(for: paths))
+        connection.setCodeSigningRequirement(CodeSigning.requirement(forPeer: CodeSigning.daemonIdentifier))
+        return connection
+    }
+
+    /// How one call ended.
+    enum Exchange<Reply: Sendable>: Sendable {
+        case reply(Reply)
+        case closed
+        /// Set from outside the exchange, by a `DaemonExitWatch`.
+        case exited
+        case timedOut
+    }
+
+    /// Makes one `call` on the unresumed `connection`, waits for the reply
+    /// it passes on or another result set on `outcome`, and invalidates the
+    /// connection.
+    static func exchange<Reply: Sendable>(over connection: NSXPCConnection, timeout: Duration,
+                                outcome: ExchangeOutcome<Reply> = ExchangeOutcome(),
+                                call: (any DaemonControl, @escaping @Sendable (Reply) -> Void) -> Void) -> Exchange<Reply> {
+        connection.remoteObjectInterface = NSXPCInterface(with: DaemonControl.self)
+        connection.resume()
+        defer { connection.invalidate() }
+        // Called instead of the reply when the connection ends or the reply
+        // doesn't decode.
+        let proxy = connection.remoteObjectProxyWithErrorHandler { _ in outcome.set(.closed) }
+        guard let control = proxy as? any DaemonControl else { return .closed }
+        call(control) { outcome.set(.reply($0)) }
+        return outcome.wait(timeout: timeout) ?? .timedOut
     }
 }
 
-/// The pending reply to one control request. It owns the client descriptor
-/// until `send(_:)` or `close()`; a request that is never answered stays
-/// open, so the owner must eventually call one of them.
-@MainActor
-public final class ControlReply {
-    private var fd: Int32
+/// The result of one exchange, handed from the reply handler or an exit
+/// watch to the caller. The first result wins.
+final class ExchangeOutcome<Reply: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private let done = DispatchSemaphore(value: 0)
+    private var value: ControlClient.Exchange<Reply>?
 
-    /// Takes ownership of the client descriptor `fd`.
-    init(fd: Int32) {
-        self.fd = fd
+    /// Stores the result, unless one is already stored, and wakes the caller.
+    func set(_ value: ControlClient.Exchange<Reply>) {
+        let isFirst = lock.withLock {
+            guard self.value == nil else { return false }
+            self.value = value
+            return true
+        }
+        if isFirst { done.signal() }
     }
 
-    /// Writes `data` as one line and closes the connection.
-    public func send(_ data: Data) {
-        guard fd >= 0 else { return }
-        var line = data
-        line.append(UInt8(ascii: "\n"))
-        writeAll(line, to: fd)
-        close()
-    }
-
-    /// Closes the connection without a reply; the client reads EOF.
-    public func close() {
-        guard fd >= 0 else { return }
-        Darwin.close(fd)
-        fd = -1
+    /// The result, or nil if none arrives within `timeout`.
+    func wait(timeout: Duration) -> ControlClient.Exchange<Reply>? {
+        guard done.wait(timeout: .now() + timeout / .seconds(1)) == .success else { return nil }
+        return lock.withLock { value }
     }
 }
 
-/// Serves the control socket; `respond` runs on the main actor and answers
-/// through the `ControlReply`, at once or later.
+/// Watches a job's daemon on a thread of its own and calls `onExit` once,
+/// when its process exits or launchd reports the job gone.
+private final class DaemonExitWatch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isStopped = false
+
+    /// Starts watching the daemon of `agent`, whose process may not exist yet.
+    init(agent: LaunchAgent, onExit: @escaping @Sendable () -> Void) {
+        Thread.detachNewThread { [self] in
+            guard let events = try? KernelEvents() else { return }
+            var isWatchingExit = false
+            while !lock.withLock({ isStopped }) {
+                if !isWatchingExit {
+                    let job = agent.state()
+                    if job.hasExited { return onExit() }
+                    if let pid = job.pid {
+                        guard events.watchExit(ofProcess: pid) else { return onExit() }
+                        isWatchingExit = true
+                    }
+                }
+                // Until the pid is known, launchd is asked again each round.
+                if events.wait(timeout: isWatchingExit ? .seconds(1) : .milliseconds(200)) == .processExited {
+                    return onExit()
+                }
+            }
+        }
+    }
+
+    /// Stops watching within a second; `onExit` isn't called after that.
+    func stop() {
+        lock.withLock { isStopped = true }
+    }
+}
+
+/// What the daemon does for each control call, on the main actor.
 @MainActor
-public enum ControlServer {
-    public static func listen(path: String, respond: @escaping @MainActor (ControlRequest, ControlReply) -> Void) throws -> SocketListener {
-        try SocketListener.unix(path: path) { client in
-            // Read off the accept loop, so a client that sends nothing can't
-            // hold up the others for the 5 s timeout.
-            // A thread, not global(): the read blocks, and global() workers
-            // also run the accept and UDP read sources. Threads aren't capped,
-            // but only the user's own processes can connect (mode 0600) and
-            // each thread ends within the 5 s timeout.
-            Thread.detachNewThread {
-                SocketOptions.setTimeout(seconds: 5, on: client)
-                guard let line = LineReader(fd: client).readLine(),
-                      let request = try? JSONDecoder().decode(ControlRequest.self, from: line)
-                else {
-                    close(client)
-                    return
-                }
-                Task { @MainActor in
-                    respond(request, ControlReply(fd: client))
-                }
+public protocol ControlHandler: AnyObject {
+    /// The current status.
+    func status() -> DaemonStatus
+    /// Starts a stop; runs after the reply is sent.
+    func stop()
+    /// Calls `reply` once Docker is ready, or with nil when the daemon stops
+    /// first. Must call it eventually.
+    func waitUntilReady(reply: @escaping @Sendable (DaemonStatus?) -> Void)
+}
+
+/// Serves `DaemonControl` to every client of a listener, handing each call
+/// to a `ControlHandler` on the main actor.
+@MainActor
+public final class ControlServer: NSObject, NSXPCListenerDelegate, DaemonControl {
+    private let listener: NSXPCListener
+    private weak var handler: (any ControlHandler)?
+
+    /// Checks in the launchd Mach service `name`, admitting only clients
+    /// signed as the dockma CLI. Serves until the process exits.
+    public static func listen(machService name: String, handler: any ControlHandler) -> ControlServer {
+        let listener = NSXPCListener(machServiceName: name)
+        listener.setConnectionCodeSigningRequirement(CodeSigning.requirement(forPeer: CodeSigning.cliIdentifier))
+        return ControlServer(listener: listener, handler: handler)
+    }
+
+    /// Serves `handler` on the unresumed `listener`.
+    init(listener: NSXPCListener, handler: any ControlHandler) {
+        self.listener = listener
+        self.handler = handler
+        super.init()
+        // The listener holds its delegate weakly; the caller keeps this.
+        listener.delegate = self
+        listener.resume()
+    }
+
+    /// The endpoint of an anonymous listener, for tests.
+    var endpoint: NSXPCListenerEndpoint { listener.endpoint }
+
+    /// Stops accepting clients.
+    func invalidate() {
+        listener.invalidate()
+    }
+
+    nonisolated public func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
+        connection.exportedInterface = NSXPCInterface(with: DaemonControl.self)
+        connection.exportedObject = self
+        connection.resume()
+        return true
+    }
+
+    nonisolated public func status(reply: @escaping @Sendable (DaemonStatusMessage) -> Void) {
+        onHandler { reply(DaemonStatusMessage($0.status())) }
+    }
+
+    nonisolated public func stop(reply: @escaping @Sendable () -> Void) {
+        let connection = NSXPCConnection.current()
+        onHandler { handler in
+            reply()
+            // A stop can exit at once (VM not running yet), so it waits until
+            // the reply has left.
+            let stop = { DispatchQueue.main.async { MainActor.assumeIsolated { handler.stop() } } }
+            guard let connection else { return stop() }
+            connection.scheduleSendBarrierBlock(stop)
+        }
+    }
+
+    nonisolated public func waitUntilReady(reply: @escaping @Sendable (DaemonStatusMessage?) -> Void) {
+        onHandler { $0.waitUntilReady { reply($0.map(DaemonStatusMessage.init)) } }
+    }
+
+    /// Runs `body` with the handler on the main actor, or drops the calling
+    /// connection when the handler is gone.
+    private nonisolated func onHandler(_ body: @escaping @MainActor (any ControlHandler) -> Void) {
+        let connection = NSXPCConnection.current()
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                guard let handler = self.handler else { return connection?.invalidate() ?? () }
+                body(handler)
             }
         }
     }

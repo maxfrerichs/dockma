@@ -57,7 +57,7 @@ import Testing
 
 @Test func shutdownGraceEndsBeforeLaunchdKillsTheDaemon() throws {
     let paths = Paths(root: URL(fileURLWithPath: "/tmp/dockma-plist"), home: URL(fileURLWithPath: "/tmp"))
-    let data = try LaunchAgent(paths: paths, executable: "/bin/dockma").plist(autostart: false)
+    let data = try LaunchAgent(paths: paths, executable: "/bin/dockmad").plist(autostart: false)
     let plist = try #require(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
     let exitTimeOut = try #require(plist["ExitTimeOut"] as? Int)
     #expect(Daemon.shutdownGrace < .seconds(exitTimeOut))
@@ -80,4 +80,22 @@ import Testing
     try other.write(contentsOf: Data("new".utf8))
     #expect(FileManager.default.contents(atPath: log.path) == Data("new".utf8))
     #expect(FileManager.default.contents(atPath: log.appendingPathExtension("1").path) == Data("old".utf8))
+}
+
+@Test func sleepMessagesAreAllowedAndWakeIsForwarded() {
+    // iokit_common_msg() values from IOMessage.h.
+    #expect(SystemPower.action(for: 0xE000_0270) == .allowSleep) // kIOMessageCanSystemSleep
+    #expect(SystemPower.action(for: 0xE000_0280) == .allowSleep) // kIOMessageSystemWillSleep
+    #expect(SystemPower.action(for: 0xE000_0300) == .wake) // kIOMessageSystemHasPoweredOn
+    // kIOMessageSystemWillPowerOn is sent before the wake completes.
+    #expect(SystemPower.action(for: 0xE000_0320) == .ignore)
+}
+
+@MainActor @Test func powerObserverRegistersAndDeregisters() throws {
+    var power = SystemPower {}
+    try #require(power != nil)
+    weak let released = power
+    // On the main actor, the isolated deinit runs as the last reference goes.
+    power = nil
+    #expect(released == nil)
 }

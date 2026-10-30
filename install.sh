@@ -1,16 +1,16 @@
 #!/bin/sh
-# Installs the dockma CLI from a GitHub release, then its Linux guest.
+# Installs the dockma CLI and dockmad from a GitHub release, then the Linux guest.
 #
 #   curl -fsSL https://dockma.dev/install.sh | sh
 #
 # Downloads dockma-<version>-macos-arm64.tar.gz, checks it against the
 # release's SHA256SUMS (and its build provenance attestation, when an
 # authenticated `gh` is installed), fetches the matching guest with the new
-# binary's `dockma install`, then installs the binary. It doesn't start the VM.
+# binary's `dockma install`, then installs the binaries. It doesn't start the VM.
 #
 # Environment:
 #   DOCKMA_VERSION       release to install, 0.3.0 or later (default: the latest)
-#   DOCKMA_INSTALL_DIR   where the binary goes (default: ~/.local/bin)
+#   DOCKMA_INSTALL_DIR   where dockma and dockmad go (default: ~/.local/bin)
 #   DOCKMA_SKIP_GUEST=1  install only the CLI, not the guest
 #   DOCKMA_RELEASE_URL   directory with the release assets instead of GitHub
 #                        (a URL or an absolute path); needs DOCKMA_VERSION. Also
@@ -69,7 +69,8 @@ main() {
 	say "Checksum verified"
 	verify_attestation
 
-	tar -xzf "$tmp/$asset" -C "$tmp" dockma
+	# Releases before dockmad ship only dockma.
+	tar -xzf "$tmp/$asset" -C "$tmp" || fail "can't unpack $asset."
 	actual=$("$tmp/dockma" --version) || fail "the downloaded binary doesn't run."
 	[ "$actual" = "$version" ] || fail "the binary reports version '$actual', expected '$version'."
 
@@ -81,12 +82,16 @@ main() {
 		"$tmp/dockma" install < /dev/null || fail "the guest download failed; nothing was installed."
 	fi
 
-	# A new inode, moved into place: a running daemon keeps its old binary
-	# instead of having its signed pages rewritten underneath it.
+	# New inodes, moved into place: a running daemon keeps its old binary
+	# instead of having its signed pages rewritten underneath it. The daemon
+	# first, so a dockma that is in place always finds its dockmad.
 	mkdir -p "$install_dir" || fail "can't create $install_dir; set DOCKMA_INSTALL_DIR."
-	cp "$tmp/dockma" "$install_dir/.dockma.new.$$" || fail "can't write to $install_dir; set DOCKMA_INSTALL_DIR."
-	chmod 0755 "$install_dir/.dockma.new.$$"
-	mv -f "$install_dir/.dockma.new.$$" "$install_dir/dockma"
+	for binary in dockmad dockma; do
+		[ -f "$tmp/$binary" ] || continue
+		cp "$tmp/$binary" "$install_dir/.$binary.new.$$" || fail "can't write to $install_dir; set DOCKMA_INSTALL_DIR."
+		chmod 0755 "$install_dir/.$binary.new.$$"
+		mv -f "$install_dir/.$binary.new.$$" "$install_dir/$binary"
+	done
 	say "Installed $install_dir/dockma"
 
 	next_steps
@@ -162,7 +167,7 @@ cleanup() {
 		rmdir "$tmp" 2>/dev/null || true
 	fi
 	if [ -n "${install_dir:-}" ]; then
-		rm -f "$install_dir/.dockma.new.$$"
+		rm -f "$install_dir/.dockma.new.$$" "$install_dir/.dockmad.new.$$"
 	fi
 }
 

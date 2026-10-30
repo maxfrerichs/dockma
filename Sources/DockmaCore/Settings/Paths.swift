@@ -35,7 +35,6 @@ public struct Paths: Sendable {
     public var config: URL { root.appendingPathComponent("config.json") }
     public var dataDisk: URL { root.appendingPathComponent("data.img") }
     public var dockerSocket: URL { root.appendingPathComponent("docker.sock") }
-    public var controlSocket: URL { root.appendingPathComponent("control.sock") }
     public var shellSocket: URL { root.appendingPathComponent("shell.sock") }
     /// Held (flock) by the running daemon.
     public var daemonLock: URL { root.appendingPathComponent("daemon.lock") }

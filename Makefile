@@ -1,11 +1,17 @@
 # dockma build entry points. `swift build` alone is not enough to run the VM:
 # Virtualization.framework requires the com.apple.security.virtualization
-# entitlement, so the binary is ad-hoc signed after every build.
+# entitlement on dockmad, and the CLI and daemon only talk to peers
+# signed with the other's identifier, so both are ad-hoc signed after every
+# build.
 
 CONFIGURATION ?= debug
 DOCKER ?= docker
 PREFIX ?= $(HOME)/.local
-BIN = $(shell swift build -c $(CONFIGURATION) --show-bin-path 2>/dev/null)/dockma
+BIN_DIR = $(shell swift build -c $(CONFIGURATION) --show-bin-path 2>/dev/null)
+BIN = $(BIN_DIR)/dockma
+DAEMON_BIN = $(BIN_DIR)/dockmad
+SIGN = codesign --force --sign - -i io.dockma.cli $(BIN) && \
+	codesign --force --sign - -i io.dockma.daemon --entitlements dockma.entitlements $(DAEMON_BIN)
 # The state directory `dockma` uses: DOCKMA_HOME, or ~/.dockma.
 STATE_DIR = $(or $(DOCKMA_HOME),$(HOME)/.dockma)
 GUEST_DIR = $(STATE_DIR)/guest
@@ -23,22 +29,24 @@ DEBUG_HOME ?= $(HOME)/.dockma-debug
 
 build:
 	swift build -c $(CONFIGURATION) --product dockma
-	codesign --force --sign - --entitlements dockma.entitlements $(BIN)
-	@echo "built $(BIN)"
+	swift build -c $(CONFIGURATION) --product dockmad
+	$(SIGN)
+	@echo "built $(BIN) and $(DAEMON_BIN)"
 
-# launchd runs the binary from wherever `dockma start` was invoked, and any
-# later `swift build` relinks .build/ unsigned. A stable installed copy
+# launchd runs the dockmad beside the `dockma` that ran `start`, and
+# any later `swift build` relinks .build/ unsigned. A stable installed copy
 # avoids that.
 install: CONFIGURATION = release
 install: build
 	mkdir -p $(PREFIX)/bin
+	install -m 0755 $(DAEMON_BIN) $(PREFIX)/bin/dockmad
 	install -m 0755 $(BIN) $(PREFIX)/bin/dockma
-	@echo "installed $(PREFIX)/bin/dockma"
+	@echo "installed $(PREFIX)/bin/dockma and dockmad"
 
-# swift test relinks the dockma binary without the entitlement, like swift
-# build; re-sign it whether or not the tests pass.
+# swift test relinks the binaries unsigned, like swift build; re-sign them
+# whether or not the tests pass.
 test:
-	swift test; status=$$?; codesign --force --sign - --entitlements dockma.entitlements $(BIN); exit $$status
+	swift test; status=$$?; $(SIGN); exit $$status
 
 # Builds kernel + initramfs in a Linux container (any arm64 Docker works,
 # including dockma itself once it is running).
