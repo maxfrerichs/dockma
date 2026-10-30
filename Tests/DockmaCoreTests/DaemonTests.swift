@@ -81,3 +81,12 @@ import Testing
     #expect(FileManager.default.contents(atPath: log.path) == Data("new".utf8))
     #expect(FileManager.default.contents(atPath: log.appendingPathExtension("1").path) == Data("old".utf8))
 }
+
+@Test func sleepMessagesAreAllowedAndWakeIsForwarded() {
+    // iokit_common_msg() values from IOMessage.h.
+    #expect(SystemPower.action(for: 0xE000_0270) == .allowSleep) // kIOMessageCanSystemSleep
+    #expect(SystemPower.action(for: 0xE000_0280) == .allowSleep) // kIOMessageSystemWillSleep
+    #expect(SystemPower.action(for: 0xE000_0300) == .wake) // kIOMessageSystemHasPoweredOn
+    // kIOMessageSystemWillPowerOn is sent before the wake completes.
+    #expect(SystemPower.action(for: 0xE000_0320) == .ignore)
+}

@@ -26,6 +26,8 @@ public final class Daemon {
     private var agent: AgentClient?
     private var ports: PortForwarder?
     private var files: FileWatcher?
+    /// Syncs the guest clock when the Mac wakes.
+    private var systemPower: SystemPower?
     private var listeners: [SocketListener] = []
     /// Open until the process exits, so `status` answers `stopping` during a
     /// stop instead of leaving the client waiting.
@@ -198,8 +200,15 @@ public final class Daemon {
             return
         }
 
-        // Clocks drift apart while the Mac sleeps; the agent steps the guest
-        // clock only when it is off by more than half a second.
+        // The guest clock stands still while the Mac sleeps, so it is synced
+        // on every wake; the timer catches changes to the host clock. The
+        // agent steps the guest clock only when it is off by more than half a second.
+        systemPower = SystemPower { [weak self] in
+            guard let self, !self.isStopRequested else { return }
+            Log.info("Mac woke, syncing the guest clock")
+            self.agent?.send(.setTime(Date()))
+        }
+        if systemPower == nil { Log.info("cannot register for wake notifications; the guest clock may lag up to \(Self.timeSyncInterval) after sleep") }
         Task { [weak self] in
             while true {
                 try? await Task.sleep(for: Self.timeSyncInterval)

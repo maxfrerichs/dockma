@@ -13,6 +13,7 @@ All notable changes to dockma are recorded here. The format follows [Keep a Chan
 - `dockma daemon` no longer runs the daemon in the foreground: launchd hands the XPC service only to its job. To debug the daemon from its first instruction, `DOCKMA_WAIT_FOR_DEBUGGER=1 dockma start` has launchd start it suspended until a debugger attaches.
 
 ### Fixed
+- The guest clock is synced as soon as the Mac fully wakes. The guest's clock stands still while the Mac sleeps; after a sleep shorter than 30 s it used to stay behind by the length of the sleep until the next 30 s sync.
 - A guest that stops reading its control connection no longer freezes the daemon: a write to the agent that blocks for 5 s drops the connection, and the agent reconnects. Before, `dockma status` and `stop`, new docker.sock connections and published ports could all hang behind it.
 - The daemon applies the agent's messages in the order they were sent, so two quick port changes can't leave a stale set of forwarded ports.
 - A `dockma stop` that arrives while the VM is starting no longer leaves the docker and shell sockets open during the shutdown.

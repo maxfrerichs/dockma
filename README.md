@@ -229,7 +229,7 @@ For maintainers, [docs/architecture.md](docs/architecture.md) has the components
   - dials the host's control port and reports Docker readiness (waiting on inotify while dockerd is down) and published ports (from the Docker events API), and names the bind-mount sources under home to watch;
   - turns changes made on the Mac to those sources into inotify events in containers (`/proc/fs/dockma-notify`), dropping the echoes of the guest's own writes;
   - runs `dockma shell` sessions on a pty or pipes, with stdin flow control so signals never wait behind unread input;
-  - steps the guest clock to the host's every 30 s, which fixes drift after the Mac sleeps;
+  - steps the guest clock to the host's when the daemon asks: when the agent connects, when the Mac wakes (the guest clock stands still during sleep) and every 30 s;
   - serves DNS on port 10053, reached through an nftables redirect of the VM's port 53: it answers `host.docker.internal` itself and relays the rest to the DHCP lease's servers. Port 53 stays free for containers like Pi-hole; containers that query such a server at the VM's address reach the agent instead, so point them at it by name or container IP;
   - runs `fstrim` hourly, so `data.img` shrinks after you delete images;
   - accepts vsock connections only from the host (CID 2); the kernel has no vsock loopback.
