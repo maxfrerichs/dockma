@@ -4,6 +4,6 @@ text: |
   docker:   ready (/Users/you/.dockma/docker.sock)
   uptime:   12m 4s
   vm:       6 CPUs, 4096 MiB, kernel {kernel}
-  agent:    connected 0.6.0
+  agent:    connected 0.7.2
   ports:    8080, 1053/udp
-  daemon:   pid 55658 0.4.0
+  daemon:   pid 55658 0.7.0
