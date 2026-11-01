@@ -60,6 +60,13 @@ cmdline_path() {
 	[ -n "$value" ] && printf "$(echo "$value" | sed 's/%/\\x/g')"
 }
 
+# The Mac's time zone, so `-v /etc/localtime:/etc/localtime` and
+# `-v /etc/timezone:/etc/timezone` find files here; UTC from an older host.
+tz=$(cmdline_path timezone)
+case $tz in "" | *..*) tz=UTC ;; esac
+[ -f "/usr/share/zoneinfo/$tz" ] || { log "unknown time zone $tz, using UTC"; tz=UTC; }
+cp "/usr/share/zoneinfo/$tz" /etc/localtime && echo "$tz" >/etc/timezone
+
 # The host home directory is mounted at the same path it has on the host so
 # bind mounts like `-v $PWD:/src` resolve.
 home=$(cmdline_path home)

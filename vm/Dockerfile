@@ -91,7 +91,7 @@ RUN wget -q https://download.docker.com/linux/static/stable/aarch64/docker-${DOC
 
 # --- Root filesystem and initramfs -----------------------------------------
 FROM ${ALPINE} AS rootfs
-RUN apk add --no-cache busybox-static nftables e2fsprogs e2fsprogs-extra ca-certificates-bundle cpio lz4
+RUN apk add --no-cache busybox-static nftables e2fsprogs e2fsprogs-extra ca-certificates-bundle tzdata cpio lz4
 WORKDIR /rootfs
 # copy_bin copies a dynamically linked musl binary plus the libraries ldd lists.
 RUN mkdir -p bin sbin usr/bin usr/sbin lib usr/lib etc/ssl/certs proc sys dev run tmp root var/lib/docker mnt \
@@ -103,7 +103,8 @@ RUN mkdir -p bin sbin usr/bin usr/sbin lib usr/lib etc/ssl/certs proc sys dev ru
  && copy_bin /sbin/mke2fs sbin/mke2fs \
  && copy_bin /usr/sbin/resize2fs usr/sbin/resize2fs \
  && copy_bin /sbin/e2fsck sbin/e2fsck \
- && cp /etc/ssl/certs/ca-certificates.crt etc/ssl/certs/
+ && cp /etc/ssl/certs/ca-certificates.crt etc/ssl/certs/ \
+ && mkdir -p usr/share && cp -a /usr/share/zoneinfo usr/share/
 COPY --from=cpiotool /usr/local/bin/gen_init_cpio /usr/local/bin/
 COPY --from=docker /out/ usr/bin/
 COPY --from=agent /out/dockma-agent usr/bin/dockma-agent

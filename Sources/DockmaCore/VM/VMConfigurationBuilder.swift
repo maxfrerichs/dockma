@@ -98,7 +98,8 @@ public enum VMConfigurationBuilder {
 
         let bootLoader = VZLinuxBootLoader(kernelURL: paths.kernel)
         bootLoader.initialRamdiskURL = paths.initrd
-        bootLoader.commandLine = KernelCmdline.commandLine(home: paths.home.path, state: paths.root.path)
+        bootLoader.commandLine = KernelCmdline.commandLine(
+            home: paths.home.path, state: paths.root.path, timeZone: TimeZone.current.identifier)
 
         let vm = VZVirtualMachineConfiguration()
         vm.bootLoader = bootLoader

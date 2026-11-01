@@ -145,7 +145,7 @@ flowchart TB
 |---|---|---|
 | stage 0 | [`init`](../vm/rootfs/init) | Moves the initramfs into a tmpfs, because runc can't `pivot_root` out of rootfs. |
 | init table | [`inittab`](../vm/rootfs/etc/inittab) | `rcS` once; the agent and dockerd respawned; `shutdown` before poweroff. |
-| boot | [`cmdline_path`](../vm/rootfs/etc/init.d/rcS) | Decodes `dockma.home=` and `dockma.state=` from the cmdline built by [`KernelCmdline.commandLine`](../Sources/DockmaCore/VM/KernelCmdline.swift). |
+| boot | [`cmdline_path`](../vm/rootfs/etc/init.d/rcS) | Decodes `dockma.home=`, `dockma.state=` and `dockma.timezone=` from the cmdline built by [`KernelCmdline.commandLine`](../Sources/DockmaCore/VM/KernelCmdline.swift). |
 | data disk | [`dockma-disk`](../vm/rootfs/usr/libexec/dockma-disk) | Formats only a blank disk; checks and grows an existing one. |
 | network | [`default.script`](../vm/rootfs/usr/share/udhcpc/default.script) | DHCP lease, `resolv.conf`, the nft redirect of port 53 to the agent. |
 | dockerd | [`dockerd`](../vm/rootfs/etc/init.d/dockerd) | Generates and validates the config with [`daemonconfig.Run`](../vm/agent/internal/daemonconfig/daemonconfig.go), then execs dockerd. |

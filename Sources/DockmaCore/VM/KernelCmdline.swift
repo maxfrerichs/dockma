@@ -4,14 +4,17 @@ import Foundation
 /// to mount the home share at the host path, and `dockma.state` to find the
 /// user's guest overrides (daemon.json, CA certificates) in the state
 /// directory, which the guest sees only when it lies under the home share.
+/// `dockma.timezone` names the Mac's time zone, which rcS installs as the
+/// guest's `/etc/localtime` and `/etc/timezone`.
 public enum KernelCmdline {
-    /// The command line for the home share at `home` and the state directory
-    /// at `state`. `panic=5` reboots a panicked guest after 5 s, instead of
+    /// The command line for the home share at `home`, the state directory
+    /// at `state` and the time zone `timeZone`, an IANA name such as
+    /// `Europe/Berlin`. `panic=5` reboots a panicked guest after 5 s, instead of
     /// a hung VM that still reports itself running. VZ reboots a Linux guest
     /// in place: the daemon keeps running and the agent reconnects.
     /// `rcupdate.rcu_expedited=1` shortens the RCU grace periods that
     /// container setup and teardown wait on, about 50 ms per `docker run`.
-    public static func commandLine(home: String, state: String) -> String {
+    public static func commandLine(home: String, state: String, timeZone: String) -> String {
         [
             "console=hvc0",
             "rdinit=/init",
@@ -20,6 +23,7 @@ public enum KernelCmdline {
             "rcupdate.rcu_expedited=1",
             "dockma.home=\(percentEncoded(home))",
             "dockma.state=\(percentEncoded(state))",
+            "dockma.timezone=\(percentEncoded(timeZone))",
         ].joined(separator: " ")
     }
 

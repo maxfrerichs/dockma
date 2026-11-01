@@ -54,7 +54,7 @@ The CLI and the daemon are two processes, so this tour has two parts. Start each
 | Stop | Where | Look at |
 |---|---|---|
 | 1 | [`Daemon.boot`](../Sources/DockmaCore/Daemon/Daemon.swift) | The control service is checked in before anything can fail. `built.configuration`: CPUs, memory, devices. |
-| 2 | [`KernelCmdline.commandLine`](../Sources/DockmaCore/VM/KernelCmdline.swift) | The guest's command line: `dockma.home=`, `dockma.state=`, `panic=5`. |
+| 2 | [`KernelCmdline.commandLine`](../Sources/DockmaCore/VM/KernelCmdline.swift) | The guest's command line: `dockma.home=`, `dockma.state=`, `dockma.timezone=`, `panic=5`. |
 | 3 | [`Daemon.vmStarted`](../Sources/DockmaCore/Daemon/Daemon.swift) | The Docker and shell sockets are served before the agent connects. |
 | 4 | [`main`](../vm/agent/main.go) (agent) | With the wait file, Delve holds the agent here. Its servers start before it dials the host. |
 | 5 | [`handleControl`](../vm/agent/control.go) (agent) | The first messages: `hello`, then `docker`, `ports`, `watch` from the first snapshot. |
