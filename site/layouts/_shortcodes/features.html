@@ -1,0 +1,9 @@
+{{- /* The feature grid, from the features list in the page's front matter. */ -}}
+<div class="grid">
+{{- range .Page.Params.features }}
+<div class="cell">
+<h3>{{ .title }}</h3>
+<p>{{ .body | markdownify }}</p>
+</div>
+{{- end }}
+</div>

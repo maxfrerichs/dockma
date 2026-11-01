@@ -1,0 +1,4 @@
+{{- /* Command output: a line starting with "$ " is the command, its prompt in span.p. */ -}}
+<div class="code">
+<pre>{{ .Inner | htmlEscape | replaceRE `(?m)^\$ ` `<span class="p">$$ </span>` | safeHTML }}</pre>
+</div>
