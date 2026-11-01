@@ -34,6 +34,8 @@ def write_facts(root: Path) -> None:
     if missing:
         sys.exit(f"vm/Dockerfile has no ARG for: {', '.join(missing)}")
     facts["kernelSeries"] = ".".join(facts["kernel"].split(".")[:2])
+    # site/data/ has no tracked files, so a fresh checkout lacks it.
+    (root / "site/data").mkdir(exist_ok=True)
     (root / "site/data/facts.json").write_text(json.dumps(facts, indent=2) + "\n")
 
 
