@@ -4,6 +4,12 @@ All notable changes to dockma are recorded here. The format follows [Keep a Chan
 
 ## Unreleased
 
+### Added
+- The VM uses the Mac's time zone, read when the VM starts. `-v /etc/localtime:/etc/localtime:ro` and `-v /etc/timezone:/etc/timezone:ro` now give containers the Mac's time zone. Before, the VM had neither file: images that ship `/etc/localtime` (Debian, Ubuntu) failed to start with "not a directory", and others silently stayed on UTC. Containers without these mounts still run in UTC, as on any Docker engine. Logs from inside the VM, such as dockerd's in `docker.log`, now use the Mac's time zone. After a time zone change on the Mac, `dockma restart` picks it up. Needs the new guest (`dockma install`, or `make guest install-guest`) and `dockma restart`; an older guest keeps running in UTC.
+
+### Fixed
+- The data disk is attached with host caching instead of Virtualization.framework's automatic mode, which Lima and UTM linked to ext4 corruption in Linux guests (checksum errors, read-only remounts). Flushes behave as before, and builds and fsync-heavy work measured as fast as before. Takes effect after `dockma restart`; the guest is unchanged.
+
 ## 0.7.0 – 2026-10-30
 
 ### Added

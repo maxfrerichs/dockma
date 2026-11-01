@@ -74,6 +74,12 @@ docker run --rm -v "$HOME:$HOME" alpine sh -c "echo ok > '$marker'"
 [ "$(cat "$marker")" = ok ] || fail "file written in container not visible on host"
 rm -f "$marker"
 
+step "/etc/localtime and /etc/timezone mounts get the Mac's time zone"
+[ "$(docker run --rm -v /etc/timezone:/etc/timezone:ro alpine cat /etc/timezone)" = "$(readlink /etc/localtime | sed 's|.*/zoneinfo/||')" ] ||
+	fail "/etc/timezone doesn't name the Mac's time zone"
+[ "$(docker run --rm -v /etc/localtime:/etc/localtime:ro alpine date +%Z)" = "$(date +%Z)" ] ||
+	fail "/etc/localtime doesn't give the Mac's time zone"
+
 step "changes on the Mac raise inotify events in containers"
 notify_dir="$HOME/.dockma-e2e-notify-$$"
 mkdir -p "$notify_dir/sub"

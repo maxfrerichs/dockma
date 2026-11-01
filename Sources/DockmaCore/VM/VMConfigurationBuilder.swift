@@ -98,7 +98,8 @@ public enum VMConfigurationBuilder {
 
         let bootLoader = VZLinuxBootLoader(kernelURL: paths.kernel)
         bootLoader.initialRamdiskURL = paths.initrd
-        bootLoader.commandLine = KernelCmdline.commandLine(home: paths.home.path, state: paths.root.path)
+        bootLoader.commandLine = KernelCmdline.commandLine(
+            home: paths.home.path, state: paths.root.path, timeZone: TimeZone.current.identifier)
 
         let vm = VZVirtualMachineConfiguration()
         vm.bootLoader = bootLoader
@@ -117,11 +118,12 @@ public enum VMConfigurationBuilder {
         console.ports[1] = Self.makeLogPort(name: "docker", isConsole: false, writingTo: dockerLog)
         vm.consoleDevices = [console]
 
+        // .automatic corrupts ext4 in Linux guests (lima-vm/lima#2026, utmapp/UTM#5919).
         let disk = try VZDiskImageStorageDeviceAttachment(
-            url: paths.dataDisk, readOnly: false, cachingMode: .automatic, synchronizationMode: .fsync)
+            url: paths.dataDisk, readOnly: false, cachingMode: .cached, synchronizationMode: .fsync)
         vm.storageDevices = [VZVirtioBlockDeviceConfiguration(attachment: disk)]
 
-        let network = VZVirtioNetworkDeviceConfiguration()
+        let network: VZVirtioNetworkDeviceConfiguration = VZVirtioNetworkDeviceConfiguration()
         network.attachment = VZNATNetworkDeviceAttachment()
         if let mac = config.macAddress.flatMap(VZMACAddress.init(string:)) {
             network.macAddress = mac
@@ -140,7 +142,7 @@ public enum VMConfigurationBuilder {
         if config.rosetta {
             switch VZLinuxRosettaDirectoryShare.availability {
             case .installed:
-                let rosetta = VZVirtioFileSystemDeviceConfiguration(tag: "rosetta")
+                let rosetta: VZVirtioFileSystemDeviceConfiguration = VZVirtioFileSystemDeviceConfiguration(tag: "rosetta")
                 rosetta.share = try VZLinuxRosettaDirectoryShare()
                 shares.append(rosetta)
             case .notInstalled:
