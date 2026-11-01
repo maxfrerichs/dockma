@@ -4,6 +4,9 @@ All notable changes to dockma are recorded here. The format follows [Keep a Chan
 
 ## Unreleased
 
+### Fixed
+- The data disk is attached with host caching instead of Virtualization.framework's automatic mode, which Lima and UTM linked to ext4 corruption in Linux guests (checksum errors, read-only remounts). Flushes behave as before, and builds and fsync-heavy work measured as fast as before. Takes effect after `dockma restart`; the guest is unchanged.
+
 ## 0.7.0 – 2026-10-30
 
 ### Added

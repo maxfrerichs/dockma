@@ -66,7 +66,7 @@ Each cell shows median (IQR, n). The best median is in bold. `≈` marks an engi
 ## Known limits
 
 - **Footprint is not fully comparable.** Memory is attributed to the VZ XPC process. OrbStack sizes guest memory dynamically, so a cap of 4 GiB is not 4 GiB held. Report the method next to the number.
-- **Disk flush semantics.** dockma and Lima 2.2.1 both attach their disks with `synchronizationMode: .fsync`, which on macOS doesn't flush the drive's cache (no `F_FULLFSYNC`). Their caching modes differ: dockma uses `automatic`, Lima `cached`. OrbStack's settings aren't public. Results that depend on fsync (pgbench, the fsync IOPS rows) compare the same promise for dockma and Lima, but not necessarily for OrbStack.
+- **Disk flush semantics.** dockma and Lima 2.2.1 both attach their disks with `synchronizationMode: .fsync`, which on macOS doesn't flush the drive's cache (no `F_FULLFSYNC`). Both now use the caching mode `cached`; dockma used `automatic` up to 0.7.0, which `DISK=1 scripts/bench.sh` measured no differently. OrbStack's settings aren't public. Results that depend on fsync (pgbench, the fsync IOPS rows) compare the same promise for dockma and Lima, but not necessarily for OrbStack.
 - **Engines differ in more than the VM.** Docker and BuildKit versions, the storage driver or containerd snapshotter, the cgroup driver and the kernel all differ. All of them are in `meta.json`. A difference in a result may come from any of them.
 - **inotify for host changes** is off by default in Lima (`--mount-inotify`). The defaults are measured as shipped.
 - Results are for one Mac model. Check `meta.json` before comparing across machines.
