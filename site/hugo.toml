@@ -16,9 +16,9 @@ enableRobotsTXT = true
 [markup.goldmark.renderer]
   unsafe = true
 
-# Plain <pre><code>, styled by the site's own CSS, instead of Chroma's inline styles.
-[markup.highlight]
-  codeFences = false
+# {.class} lines under paragraphs and lists, used by content/_index.md.
+[markup.goldmark.parser.attribute]
+  block = true
 
 # Typographer would turn `--flag` into an en dash.
 [markup.goldmark.extensions]

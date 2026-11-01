@@ -1,0 +1,3 @@
+{{- /* Fills placeholders such as {repo} into link targets, which Markdown would otherwise URL-encode. */ -}}
+<a href="{{ partial "expand.html" .Destination | safeURL }}"{{ with .Title }} title="{{ . }}"{{ end }}>{{ .Text }}</a>
+{{- /**/ -}}

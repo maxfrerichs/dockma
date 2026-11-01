@@ -1,0 +1,10 @@
+{{- /* Fills the homepage placeholders (listed in content/_index.md) into a string. */ -}}
+{{- $facts := hugo.Data.facts -}}
+{{- $s := . -}}
+{{- $s = replace $s "{kernelSeries}" $facts.kernelSeries -}}
+{{- $s = replace $s "{kernel}" $facts.kernel -}}
+{{- $s = replace $s "{docker}" $facts.docker -}}
+{{- $s = replace $s "{boot}" site.Params.bootSeconds -}}
+{{- $s = replace $s "{installURL}" ("install.sh" | absURL) -}}
+{{- $s = replace $s "{repo}" (printf "https://github.com/%s" site.Params.repo) -}}
+{{- return $s -}}

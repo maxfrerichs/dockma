@@ -1,0 +1,18 @@
+{{- /* A copyable command block: "#" comments go in span.c, which the copy button skips. {.install} is the one-line install command beside its button. */ -}}
+{{- $id := printf "code-%d" .Ordinal -}}
+{{- $lines := slice -}}
+{{- range split .Inner "\n" -}}
+{{- $lines = $lines | append (. | htmlEscape | replaceRE `(#.*)$` `<span class="c">$1</span>`) -}}
+{{- end -}}
+{{- $text := delimit $lines "\n" -}}
+{{- if eq .Attributes.class "install" -}}
+<div class="code install">
+<pre id="{{ $id }}"><span class="p">$ </span>{{ replace $text " | " "&nbsp;|&nbsp;" | safeHTML }}</pre>
+<button class="copy" type="button" data-copy="{{ $id }}">copy</button>
+</div>
+{{- else -}}
+<div class="code">
+<button class="copy" type="button" data-copy="{{ $id }}">copy</button>
+<pre id="{{ $id }}">{{ $text | safeHTML }}</pre>
+</div>
+{{- end -}}
